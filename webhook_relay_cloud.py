@@ -52,6 +52,24 @@ FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', 'Ez8BLvrXG3kvWg6avZqD3gd
 # 配置文件路徑
 CONFIG_FILE = os.environ.get('CONFIG_FILE', 'webhook_config.json')
 
+# 時區設定（預設台灣 UTC+8）
+TIMEZONE_OFFSET = int(os.environ.get('TIMEZONE_OFFSET', 8))  # 小時
+
+# ================================================================================
+# 時區輔助函數
+# ================================================================================
+
+def get_local_time() -> datetime:
+    """獲取本地時間（根據 TIMEZONE_OFFSET 設定）"""
+    from datetime import timezone, timedelta
+    utc_now = datetime.now(timezone.utc)
+    local_tz = timezone(timedelta(hours=TIMEZONE_OFFSET))
+    return utc_now.astimezone(local_tz)
+
+def get_local_time_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """獲取格式化的本地時間字串"""
+    return get_local_time().strftime(fmt)
+
 # ================================================================================
 # 🔧 硬編碼預設配置（重啟自動恢復）
 # ================================================================================
@@ -72,7 +90,7 @@ PRESET_WEBHOOKS = {
             },
             {
                 "name": "喵z飛書通知",
-                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/a20b81ba-3f99-4f8e-8fa6-4efed644c509",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/9a199629-4368-4093-8dcf-bed6f2bae085",
                 "type": "feishu",
                 "enabled": True
             },
@@ -92,7 +110,7 @@ PRESET_WEBHOOKS = {
             },
             {
                 "name": "蘑菇飛書通知",
-                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/c9ef669d-f1da-42ec-9e39-1d939db2e78c",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/97a7254b-563f-4115-a0e6-9ebdd174bb7d",
                 "type": "feishu",
                 "enabled": True
             },
@@ -112,7 +130,7 @@ PRESET_WEBHOOKS = {
             },
             {
                 "name": "仙人飛書通知",
-                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/71381da3-e69a-486b-8c94-d2ebafae8e15",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/8a52a977-a826-48c9-804e-a69baa75cada",
                 "type": "feishu",
                 "enabled": True
             },
@@ -152,7 +170,7 @@ PRESET_WEBHOOKS = {
             },
             {
                 "name": "小巴飛書通知",
-                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/faca7185-6ea0-4c47-aa07-307f46d16268",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/7b80a188-da17-4817-b533-c123a970a51a",
                 "type": "feishu",
                 "enabled": True
             },
@@ -262,10 +280,10 @@ class WebhookItem:
         self.webhook_type = webhook_type
         self.enabled = enabled
         self.stats = {"sent": 0, "failed": 0}
-        self.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.created_at = get_local_time_str()
     
     def _generate_default_name(self, webhook_type: str) -> str:
-        timestamp = datetime.now().strftime("%H%M%S")
+        timestamp = get_local_time_str("%H%M%S")
         return f"{'飛書' if webhook_type == 'feishu' else 'Discord'}-{timestamp}"
     
     def to_dict(self) -> dict:
@@ -341,7 +359,7 @@ class MessageSender:
                         content_blocks.append([{"tag": "text", "text": line + "\n"}])
             if image_key:
                 content_blocks.append([{"tag": "img", "image_key": image_key, "width": 800, "height": 600}])
-            content_blocks.append([{"tag": "text", "text": f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}])
+            content_blocks.append([{"tag": "text", "text": f"\n⏰ {get_local_time_str()}"}])
             
             payload = {
                 "msg_type": "post",
@@ -458,7 +476,7 @@ class BossGroup:
     
     def relay_message(self, content: str, image_data: bytes = None, source_ip: str = "unknown") -> tuple:
         self.stats["received"] += 1
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = get_local_time_str()
         results = []
         
         feishu_image_key = None
@@ -563,7 +581,7 @@ class WebhookRelayManager:
     def __init__(self):
         self.groups = {}
         self.lock = threading.Lock()
-        self.start_time = datetime.now()
+        self.start_time = get_local_time()
         self._save_lock = threading.Lock()
         self._save_timer = None
         
@@ -577,6 +595,7 @@ class WebhookRelayManager:
         logger.info("🔄 Webhook 中繼站 v4.1 (持久化存儲版) 已啟動")
         logger.info(f"📡 已配置 {len(self.groups)} 個 BOSS 群組")
         logger.info(f"💾 配置文件: {CONFIG_FILE}")
+        logger.info(f"🕐 時區: UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}")
         logger.info(f"🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
         logger.info("=" * 60)
     
@@ -659,7 +678,7 @@ class WebhookRelayManager:
         try:
             config = {
                 "version": "4.1",
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at": get_local_time_str(),
                 "groups": {}
             }
             
@@ -712,7 +731,7 @@ class WebhookRelayManager:
             return False
     
     def get_all_stats(self) -> dict:
-        uptime = datetime.now() - self.start_time
+        uptime = get_local_time() - self.start_time
         hours, remainder = divmod(int(uptime.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
         
@@ -728,6 +747,8 @@ class WebhookRelayManager:
             "total_failed": total_failed,
             "success_rate": f"{(total_sent / max(1, total_received) * 100):.1f}%",
             "config_file": CONFIG_FILE,
+            "timezone": f"UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}",
+            "current_time": get_local_time_str(),
             "groups": [g.get_stats() for g in self.groups.values()]
         }
     
@@ -1059,7 +1080,7 @@ HTML_TEMPLATE = '''
     <div class="container">
         <h1>🔄 Webhook 中繼站 v4.1</h1>
         <p class="subtitle">持久化存儲版 | 運行: <span id="uptime">-</span></p>
-        <p class="config-info">💾 配置文件: <span id="configFile">-</span></p>
+        <p class="config-info">💾 配置: <span id="configFile">-</span> | 🕐 時區: <span id="timezone">-</span> | 當前: <span id="currentTime">-</span></p>
         
         <div class="card">
             <h2>📊 總覽統計</h2>
@@ -1143,6 +1164,8 @@ HTML_TEMPLATE = '''
                 document.getElementById('totalFailed').textContent = data.total_failed;
                 document.getElementById('successRate').textContent = data.success_rate;
                 document.getElementById('configFile').textContent = data.config_file || '-';
+                document.getElementById('timezone').textContent = data.timezone || '-';
+                document.getElementById('currentTime').textContent = data.current_time || '-';
                 
                 renderGroups(data.groups);
             } catch (e) { console.error(e); }
@@ -1574,6 +1597,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"  📡 本地訪問: http://localhost:{PORT}")
     print(f"  💾 配置文件: {CONFIG_FILE}")
+    print(f"  🕐 時區: UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}")
     print(f"  🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
     print("=" * 60)
     print()
