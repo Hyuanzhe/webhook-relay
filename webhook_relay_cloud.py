@@ -2,23 +2,24 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-    🔄 Webhook 中繼站 v4.0 - 多模式版
+    🔄 Webhook 中繼站 v4.1 - 持久化存儲版
 ================================================================================
 
 核心功能：
-    - 🆕 兩種發送模式：同步模式 / 輪詢模式
-    - 🆕 Webhook 啟用/禁用開關（打勾控制，無需刪除）
-    - 🆕 可為每個 Webhook 設定自定義名稱
-    - 支援 Discord 和飛書 Webhook
-    - 自動上傳圖片到飛書並顯示
-    - Web 管理介面可視化管理
+    - 🆕 JSON 文件持久化存儲（自動保存/載入配置）
+    - 🆕 支援硬編碼預設 Webhook（重啟自動恢復）
+    - 兩種發送模式：同步模式 / 輪詢模式
+    - Webhook 啟用/禁用開關（無需刪除）
+    - 自定義 Webhook 名稱
+    - 支援 Discord 和飛書
 
-發送模式說明：
-    - 同步模式 (sync)：同時發送到所有啟用的 Webhook
-    - 輪詢模式 (round_robin)：輪流發送到啟用的 Webhook
+配置優先級：
+    1. JSON 文件中的配置（如果存在）
+    2. 硬編碼的 PRESET_WEBHOOKS 配置
+    3. 環境變數 WEBHOOK_GROUPS
 
 作者: @yyv3vnn
-版本: 4.0
+版本: 4.1
 ================================================================================
 """
 
@@ -34,6 +35,7 @@ from functools import wraps
 from collections import deque
 import logging
 import re
+import atexit
 
 # ================================================================================
 # 環境變數配置
@@ -46,6 +48,117 @@ PORT = int(os.environ.get('PORT', 5000))
 # 飛書應用憑證
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', 'cli_a98f2ae2ea3b900e')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', 'Ez8BLvrXG3kvWg6avZqD3gduuc5Pg0uf')
+
+# 配置文件路徑
+CONFIG_FILE = os.environ.get('CONFIG_FILE', 'webhook_config.json')
+
+# ================================================================================
+# 🔧 硬編碼預設配置（重啟自動恢復）
+# ================================================================================
+# 在這裡直接寫死你的 Webhook 配置，重啟後會自動載入
+# 如果 JSON 文件存在，會優先使用 JSON 文件的配置
+
+PRESET_WEBHOOKS = {
+    # ============ 群組 A: 喵z ============
+    "a": {
+        "display_name": "喵z",
+        "send_mode": "sync",  # "sync" 或 "round_robin"
+        "webhooks": [
+            {
+                "name": "喵喵1車",
+                "url": "https://discordapp.com/api/webhooks/1441419865331335241/TIYTWKN7iE_Hs137IuD1o0ZrallCJG0XNxcu_tvZx4uSz0UaP37yvA9z8oqNoZGJ7r7S",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "喵z飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/a20b81ba-3f99-4f8e-8fa6-4efed644c509",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
+    
+    # ============ 群組 B: 蘑菇 ============
+    "b": {
+        "display_name": "蘑菇",
+        "send_mode": "sync",  # "sync" 或 "round_robin"
+        "webhooks": [
+            {
+                "name": "蘑菇1車",
+                "url": "https://discordapp.com/api/webhooks/1443905667353022605/qoJ8CfGwH6PoSQ8p_jQZAEd9Fxfawwm6zYK55eOCXHNjxvOON90SEZkwWbepwxlLq5Pf",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "蘑菇飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/c9ef669d-f1da-42ec-9e39-1d939db2e78c",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
+    
+    # ============ 群組 C: 仙人 ============
+    "c": {
+        "display_name": "仙人娃娃",
+        "send_mode": "sync",  # "sync" 或 "round_robin"
+        "webhooks": [
+            {
+                "name": "仙人娃娃1車",
+                "url": "https://discordapp.com/api/webhooks/1444220275171397653/gGNvk6eeqWKh1HvkqdZFWP2Nc8bnPYV-u9LjWIZrPMmUjojBM8gB7drVwJK12iqgIm8-",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "仙人飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/71381da3-e69a-486b-8c94-d2ebafae8e15",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
+    
+    # ============ 群組 D: 黑輪 ============
+    "d": {
+        "display_name": "黑輪",
+        "send_mode": "sync",
+        "webhooks": [
+            {
+                "name": "黑輪1車",
+                "url": "https://discordapp.com/api/webhooks/1448220103861735575/H9um9fDJBB5MvYkCcMe5HnT8zCknP8EhS13FNmNKrNJsk53EdOItJp5qz66qarp4Ipdf",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "仙人飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/71381da3-e69a-486b-8c94-d2ebafae8e15",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
+    
+    # ============ 群組 XB: 小巴 ============
+    "xb": {
+        "display_name": "小巴",
+        "send_mode": "sync",
+        "webhooks": [
+            {
+                "name": "小巴",
+                "url": "https://discordapp.com/api/webhooks/1444649970564071454/sFbE4LZCDz7MVQgjnJo0ggTSLUW_d7eZQvokpQzyceKAVSELXSzx7LO8Wy-sK5YaPmD-",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "小巴飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/faca7185-6ea0-4c47-aa07-307f46d16268",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
+}
 
 # ================================================================================
 # 日誌設定
@@ -69,7 +182,7 @@ app = Flask(__name__)
 # ================================================================================
 
 class FeishuImageUploader:
-    """飛書圖片上傳器 - 獲取 token 並上傳圖片"""
+    """飛書圖片上傳器"""
     
     def __init__(self):
         self.upload_cache = {}
@@ -102,11 +215,10 @@ class FeishuImageUploader:
             return None
     
     def upload_image(self, image_data: bytes) -> str:
-        """上傳圖片到飛書，返回 image_key"""
+        """上傳圖片到飛書"""
         try:
             img_hash = hashlib.md5(image_data).hexdigest()
             if img_hash in self.upload_cache:
-                logger.info("📦 使用緩存的圖片 key")
                 return self.upload_cache[img_hash]
             
             token = self.get_tenant_access_token()
@@ -126,7 +238,6 @@ class FeishuImageUploader:
                     image_key = result.get('data', {}).get('image_key')
                     if image_key:
                         self.upload_cache[img_hash] = image_key
-                        logger.info(f"✅ 圖片上傳成功: {image_key[:20]}...")
                         return image_key
             return None
         except Exception as e:
@@ -134,7 +245,6 @@ class FeishuImageUploader:
             return None
 
 
-# 全局飛書上傳器
 feishu_uploader = FeishuImageUploader()
 
 # ================================================================================
@@ -142,36 +252,24 @@ feishu_uploader = FeishuImageUploader()
 # ================================================================================
 
 class WebhookItem:
-    """
-    單個 Webhook 項目
+    """單個 Webhook 項目"""
     
-    屬性：
-        - id: 唯一識別碼
-        - name: 自定義名稱
-        - url: Webhook URL
-        - webhook_type: 類型 ('discord' 或 'feishu')
-        - enabled: 是否啟用
-        - stats: 統計數據
-    """
-    
-    def __init__(self, url: str, name: str = None, webhook_type: str = 'discord', enabled: bool = True):
-        self.id = hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:8]
+    def __init__(self, url: str, name: str = None, webhook_type: str = 'discord', 
+                 enabled: bool = True, webhook_id: str = None):
+        self.id = webhook_id or hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:8]
         self.url = url
         self.name = name or self._generate_default_name(webhook_type)
-        self.webhook_type = webhook_type  # 'discord' 或 'feishu'
+        self.webhook_type = webhook_type
         self.enabled = enabled
         self.stats = {"sent": 0, "failed": 0}
         self.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     def _generate_default_name(self, webhook_type: str) -> str:
-        """生成默認名稱"""
         timestamp = datetime.now().strftime("%H%M%S")
-        if webhook_type == 'feishu':
-            return f"飛書-{timestamp}"
-        return f"Discord-{timestamp}"
+        return f"{'飛書' if webhook_type == 'feishu' else 'Discord'}-{timestamp}"
     
     def to_dict(self) -> dict:
-        """轉換為字典"""
+        """轉換為字典（用於顯示）"""
         return {
             "id": self.id,
             "name": self.name,
@@ -183,6 +281,32 @@ class WebhookItem:
             "failed": self.stats["failed"],
             "created_at": self.created_at
         }
+    
+    def to_save_dict(self) -> dict:
+        """轉換為字典（用於保存）"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "type": self.webhook_type,
+            "enabled": self.enabled,
+            "stats": self.stats,
+            "created_at": self.created_at
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'WebhookItem':
+        """從字典創建"""
+        item = cls(
+            url=data.get('url', ''),
+            name=data.get('name'),
+            webhook_type=data.get('type', 'discord'),
+            enabled=data.get('enabled', True),
+            webhook_id=data.get('id')
+        )
+        item.stats = data.get('stats', {"sent": 0, "failed": 0})
+        item.created_at = data.get('created_at', item.created_at)
+        return item
 
 
 # ================================================================================
@@ -190,11 +314,10 @@ class WebhookItem:
 # ================================================================================
 
 class MessageSender:
-    """消息發送器 - 處理 Discord 和飛書的消息發送"""
+    """消息發送器"""
     
     @staticmethod
     def send_to_discord(webhook_url: str, content: str, image_data: bytes = None) -> bool:
-        """發送消息到 Discord"""
         try:
             if image_data:
                 files = {'file': ('screenshot.png', image_data, 'image/png')}
@@ -203,7 +326,6 @@ class MessageSender:
             else:
                 payload = {"content": content}
                 response = requests.post(webhook_url, json=payload, timeout=15)
-            
             return response.status_code in [200, 204]
         except Exception as e:
             logger.error(f"❌ Discord 發送失敗: {e}")
@@ -211,50 +333,21 @@ class MessageSender:
     
     @staticmethod
     def send_to_feishu(webhook_url: str, content: str, image_key: str = None) -> bool:
-        """發送消息到飛書"""
         try:
             content_blocks = []
-            
-            # 添加文本
             if content:
                 for line in content.split('\n'):
                     if line.strip():
                         content_blocks.append([{"tag": "text", "text": line + "\n"}])
-            
-            # 添加圖片
             if image_key:
-                content_blocks.append([{
-                    "tag": "img",
-                    "image_key": image_key,
-                    "width": 800,
-                    "height": 600
-                }])
-            
-            # 添加時間戳
-            content_blocks.append([{
-                "tag": "text",
-                "text": f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            }])
+                content_blocks.append([{"tag": "img", "image_key": image_key, "width": 800, "height": 600}])
+            content_blocks.append([{"tag": "text", "text": f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}])
             
             payload = {
                 "msg_type": "post",
-                "content": {
-                    "post": {
-                        "zh_cn": {
-                            "title": "🎯 BOSS 通知",
-                            "content": content_blocks
-                        }
-                    }
-                }
+                "content": {"post": {"zh_cn": {"title": "🎯 BOSS 通知", "content": content_blocks}}}
             }
-            
-            response = requests.post(
-                webhook_url,
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=10
-            )
-            
+            response = requests.post(webhook_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=10)
             if response.status_code == 200:
                 result = response.json()
                 return result.get('code') == 0 or result.get('StatusCode') == 0
@@ -269,263 +362,165 @@ class MessageSender:
 # ================================================================================
 
 class BossGroup:
-    """
-    單一 BOSS 群組
+    """BOSS 群組 - 支援兩種發送模式"""
     
-    支援兩種發送模式：
-        - sync: 同步模式，同時發送到所有啟用的 Webhook
-        - round_robin: 輪詢模式，輪流發送到啟用的 Webhook
-    """
-    
-    # 發送模式常量
     MODE_SYNC = 'sync'
     MODE_ROUND_ROBIN = 'round_robin'
     
     def __init__(self, group_id: str, display_name: str = None):
         self.group_id = group_id.lower()
         self.display_name = display_name or f"{group_id.upper()} BOSS"
-        
-        # Webhook 列表（統一管理 Discord 和飛書）
         self.webhooks: list[WebhookItem] = []
-        
-        # 發送模式（默認同步）
         self.send_mode = self.MODE_SYNC
-        
-        # 輪詢索引
         self.current_index = 0
-        
-        # 線程鎖
         self.lock = threading.Lock()
-        
-        # 統計
-        self.stats = {
-            "received": 0,
-            "total_sent": 0,
-            "total_failed": 0
-        }
-        
-        # 歷史記錄
+        self.stats = {"received": 0, "total_sent": 0, "total_failed": 0}
         self.history = deque(maxlen=50)
+        
+        # 保存回調（由管理器設置）
+        self._save_callback = None
+    
+    def set_save_callback(self, callback):
+        """設置保存回調函數"""
+        self._save_callback = callback
+    
+    def _trigger_save(self):
+        """觸發保存"""
+        if self._save_callback:
+            self._save_callback()
     
     def set_send_mode(self, mode: str) -> tuple:
-        """設置發送模式"""
         with self.lock:
             if mode not in [self.MODE_SYNC, self.MODE_ROUND_ROBIN]:
-                return False, f"無效的模式，請使用 '{self.MODE_SYNC}' 或 '{self.MODE_ROUND_ROBIN}'"
-            
+                return False, f"無效的模式"
             self.send_mode = mode
-            mode_name = "同步模式" if mode == self.MODE_SYNC else "輪詢模式"
-            logger.info(f"[{self.group_id}] ⚙️ 發送模式已切換為: {mode_name}")
-            return True, f"已切換為{mode_name}"
+            self._trigger_save()
+            return True, f"已切換為{'同步模式' if mode == self.MODE_SYNC else '輪詢模式'}"
     
     def add_webhook(self, url: str, name: str = None, webhook_type: str = 'discord') -> tuple:
-        """添加 Webhook"""
         with self.lock:
             if not url or not url.startswith("https://"):
                 return False, "無效的 URL（必須以 https:// 開頭）"
-            
-            # 檢查重複
             for wh in self.webhooks:
                 if wh.url == url:
                     return False, "此 Webhook URL 已存在"
-            
-            # 驗證類型
             if webhook_type not in ['discord', 'feishu']:
                 return False, "類型必須是 'discord' 或 'feishu'"
             
             webhook = WebhookItem(url, name, webhook_type, enabled=True)
             self.webhooks.append(webhook)
-            
             logger.info(f"[{self.group_id}] ➕ 添加 {webhook_type} Webhook: {webhook.name}")
+            self._trigger_save()
             return True, f"添加成功: {webhook.name}"
     
     def remove_webhook(self, webhook_id: str) -> bool:
-        """移除 Webhook"""
         with self.lock:
             for i, wh in enumerate(self.webhooks):
                 if wh.id == webhook_id:
                     removed = self.webhooks.pop(i)
-                    # 調整輪詢索引
                     if self.current_index >= len(self.webhooks) and len(self.webhooks) > 0:
                         self.current_index = 0
                     logger.info(f"[{self.group_id}] ➖ 移除 Webhook: {removed.name}")
+                    self._trigger_save()
                     return True
             return False
     
     def toggle_webhook(self, webhook_id: str, enabled: bool) -> tuple:
-        """啟用/禁用 Webhook"""
         with self.lock:
             for wh in self.webhooks:
                 if wh.id == webhook_id:
                     wh.enabled = enabled
-                    status = "啟用" if enabled else "禁用"
-                    logger.info(f"[{self.group_id}] {'✅' if enabled else '⏸️'} {wh.name} 已{status}")
-                    return True, f"{wh.name} 已{status}"
+                    self._trigger_save()
+                    return True, f"{wh.name} 已{'啟用' if enabled else '禁用'}"
             return False, "找不到此 Webhook"
     
     def update_webhook(self, webhook_id: str, name: str = None) -> tuple:
-        """更新 Webhook 名稱"""
         with self.lock:
             for wh in self.webhooks:
                 if wh.id == webhook_id:
                     if name:
-                        old_name = wh.name
                         wh.name = name
-                        logger.info(f"[{self.group_id}] ✏️ 重命名: {old_name} → {name}")
+                        self._trigger_save()
                         return True, f"已重命名為: {name}"
             return False, "找不到此 Webhook"
     
-    def get_enabled_webhooks(self, webhook_type: str = None) -> list:
-        """獲取所有啟用的 Webhook"""
-        webhooks = [wh for wh in self.webhooks if wh.enabled]
-        if webhook_type:
-            webhooks = [wh for wh in webhooks if wh.webhook_type == webhook_type]
-        return webhooks
+    def get_enabled_webhooks(self) -> list:
+        return [wh for wh in self.webhooks if wh.enabled]
     
     def get_next_webhook_round_robin(self) -> WebhookItem:
-        """輪詢模式：獲取下一個要發送的 Webhook"""
-        enabled_webhooks = self.get_enabled_webhooks()
-        if not enabled_webhooks:
+        enabled = self.get_enabled_webhooks()
+        if not enabled:
             return None
-        
-        # 確保索引在範圍內
-        self.current_index = self.current_index % len(enabled_webhooks)
-        webhook = enabled_webhooks[self.current_index]
-        self.current_index = (self.current_index + 1) % len(enabled_webhooks)
-        
+        self.current_index = self.current_index % len(enabled)
+        webhook = enabled[self.current_index]
+        self.current_index = (self.current_index + 1) % len(enabled)
         return webhook
     
     def relay_message(self, content: str, image_data: bytes = None, source_ip: str = "unknown") -> tuple:
-        """
-        中繼消息
-        
-        根據發送模式：
-        - sync: 發送到所有啟用的 Webhook
-        - round_robin: 輪流發送到下一個啟用的 Webhook
-        
-        Returns:
-            tuple: (success, message, details)
-        """
         self.stats["received"] += 1
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        results = []
         
-        results = []  # 記錄發送結果
-        
-        # 預處理飛書圖片
         feishu_image_key = None
         if image_data:
             feishu_image_key = feishu_uploader.upload_image(image_data)
         
         with self.lock:
             if self.send_mode == self.MODE_SYNC:
-                # ========== 同步模式：發送到所有啟用的 Webhook ==========
                 enabled_webhooks = self.get_enabled_webhooks()
-                
                 if not enabled_webhooks:
-                    self.history.appendleft({
-                        "time": timestamp,
-                        "content": content[:50] + "..." if len(content) > 50 else content,
-                        "status": "⚠️ 無啟用的 Webhook",
-                        "source": source_ip[-15:],
-                        "has_image": bool(image_data),
-                        "mode": "同步"
-                    })
+                    self.history.appendleft({"time": timestamp, "content": content[:50], "status": "⚠️ 無啟用的 Webhook", "source": source_ip[-15:], "has_image": bool(image_data), "mode": "同步"})
                     return False, "無啟用的 Webhook", []
-                
                 for wh in enabled_webhooks:
                     success = self._send_to_webhook(wh, content, image_data, feishu_image_key)
-                    results.append({
-                        "name": wh.name,
-                        "type": wh.webhook_type,
-                        "success": success
-                    })
-                
+                    results.append({"name": wh.name, "type": wh.webhook_type, "success": success})
             else:
-                # ========== 輪詢模式：發送到下一個啟用的 Webhook ==========
                 webhook = self.get_next_webhook_round_robin()
-                
                 if not webhook:
-                    self.history.appendleft({
-                        "time": timestamp,
-                        "content": content[:50] + "..." if len(content) > 50 else content,
-                        "status": "⚠️ 無啟用的 Webhook",
-                        "source": source_ip[-15:],
-                        "has_image": bool(image_data),
-                        "mode": "輪詢"
-                    })
+                    self.history.appendleft({"time": timestamp, "content": content[:50], "status": "⚠️ 無啟用的 Webhook", "source": source_ip[-15:], "has_image": bool(image_data), "mode": "輪詢"})
                     return False, "無啟用的 Webhook", []
-                
                 success = self._send_to_webhook(webhook, content, image_data, feishu_image_key)
-                results.append({
-                    "name": webhook.name,
-                    "type": webhook.webhook_type,
-                    "success": success
-                })
+                results.append({"name": webhook.name, "type": webhook.webhook_type, "success": success})
         
-        # 計算結果
         success_count = sum(1 for r in results if r["success"])
         fail_count = len(results) - success_count
-        
         self.stats["total_sent"] += success_count
         self.stats["total_failed"] += fail_count
         
-        # 構建狀態字符串
-        status_parts = []
-        for r in results:
-            icon = "✅" if r["success"] else "❌"
-            type_icon = "🔵" if r["type"] == "discord" else "📱"
-            status_parts.append(f"{icon}{type_icon}{r['name'][:8]}")
-        
+        status_parts = [f"{'✅' if r['success'] else '❌'}{'🔵' if r['type'] == 'discord' else '📱'}{r['name'][:8]}" for r in results]
         mode_name = "同步" if self.send_mode == self.MODE_SYNC else "輪詢"
         
-        self.history.appendleft({
-            "time": timestamp,
-            "content": content[:50] + "..." if len(content) > 50 else content,
-            "status": " | ".join(status_parts) if status_parts else "⚠️ 無目標",
-            "source": source_ip[-15:],
-            "has_image": bool(image_data),
-            "mode": mode_name
-        })
+        self.history.appendleft({"time": timestamp, "content": content[:50] + "..." if len(content) > 50 else content, "status": " | ".join(status_parts), "source": source_ip[-15:], "has_image": bool(image_data), "mode": mode_name})
         
-        overall_success = success_count > 0
-        message = f"[{mode_name}] 成功: {success_count}, 失敗: {fail_count}"
-        
-        return overall_success, message, results
+        return success_count > 0, f"[{mode_name}] 成功: {success_count}, 失敗: {fail_count}", results
     
-    def _send_to_webhook(self, webhook: WebhookItem, content: str, 
-                         image_data: bytes, feishu_image_key: str) -> bool:
-        """發送消息到指定 Webhook"""
+    def _send_to_webhook(self, webhook: WebhookItem, content: str, image_data: bytes, feishu_image_key: str) -> bool:
         try:
             if webhook.webhook_type == 'discord':
                 success = MessageSender.send_to_discord(webhook.url, content, image_data)
-            else:  # feishu
+            else:
                 success = MessageSender.send_to_feishu(webhook.url, content, feishu_image_key)
             
             if success:
                 webhook.stats["sent"] += 1
-                logger.info(f"[{self.group_id}] ✅ 發送成功 → {webhook.name}")
+                logger.info(f"[{self.group_id}] ✅ → {webhook.name}")
             else:
                 webhook.stats["failed"] += 1
-                logger.error(f"[{self.group_id}] ❌ 發送失敗 → {webhook.name}")
-            
+                logger.error(f"[{self.group_id}] ❌ → {webhook.name}")
             return success
         except Exception as e:
             webhook.stats["failed"] += 1
-            logger.error(f"[{self.group_id}] ❌ 發送異常 → {webhook.name}: {e}")
+            logger.error(f"[{self.group_id}] ❌ → {webhook.name}: {e}")
             return False
     
     def get_stats(self) -> dict:
-        """獲取群組統計"""
-        enabled_count = len(self.get_enabled_webhooks())
-        total_count = len(self.webhooks)
-        
         return {
             "group_id": self.group_id,
             "display_name": self.display_name,
             "send_mode": self.send_mode,
             "send_mode_name": "同步模式" if self.send_mode == self.MODE_SYNC else "輪詢模式",
-            "webhooks_total": total_count,
-            "webhooks_enabled": enabled_count,
+            "webhooks_total": len(self.webhooks),
+            "webhooks_enabled": len(self.get_enabled_webhooks()),
             "current_index": self.current_index,
             "received": self.stats["received"],
             "total_sent": self.stats["total_sent"],
@@ -534,71 +529,167 @@ class BossGroup:
             "webhooks": [wh.to_dict() for wh in self.webhooks],
             "history": list(self.history)[:20]
         }
+    
+    def to_save_dict(self) -> dict:
+        """轉換為保存格式"""
+        return {
+            "display_name": self.display_name,
+            "send_mode": self.send_mode,
+            "current_index": self.current_index,
+            "webhooks": [wh.to_save_dict() for wh in self.webhooks]
+        }
+    
+    @classmethod
+    def from_dict(cls, group_id: str, data: dict) -> 'BossGroup':
+        """從字典創建群組"""
+        group = cls(group_id, data.get('display_name'))
+        group.send_mode = data.get('send_mode', cls.MODE_SYNC)
+        group.current_index = data.get('current_index', 0)
+        
+        for wh_data in data.get('webhooks', []):
+            webhook = WebhookItem.from_dict(wh_data)
+            group.webhooks.append(webhook)
+        
+        return group
 
 
 # ================================================================================
-# 預設群組配置
-# ================================================================================
-
-DEFAULT_BOSS_GROUPS = {
-    "a": "喵z",
-    "b": "蘑菇",
-    "c": "仙人",
-    "d": "黑輪",
-    "xb": "小巴"
-}
-
-# ================================================================================
-# 中繼站管理器
+# 中繼站管理器（帶持久化）
 # ================================================================================
 
 class WebhookRelayManager:
-    """Webhook 中繼站管理器"""
+    """Webhook 中繼站管理器 - 支援持久化存儲"""
     
     def __init__(self):
         self.groups = {}
         self.lock = threading.Lock()
         self.start_time = datetime.now()
+        self._save_lock = threading.Lock()
+        self._save_timer = None
         
-        self._create_default_groups()
-        self._load_from_env()
+        # 載入配置
+        self._load_config()
+        
+        # 註冊退出時保存
+        atexit.register(self._save_config_sync)
         
         logger.info("=" * 60)
-        logger.info("🔄 Webhook 中繼站 v4.0 (多模式版) 已啟動")
+        logger.info("🔄 Webhook 中繼站 v4.1 (持久化存儲版) 已啟動")
         logger.info(f"📡 已配置 {len(self.groups)} 個 BOSS 群組")
+        logger.info(f"💾 配置文件: {CONFIG_FILE}")
         logger.info(f"🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
         logger.info("=" * 60)
     
-    def _create_default_groups(self):
-        """建立預設的 BOSS 群組"""
-        logger.info("🔧 建立預設 BOSS 群組...")
-        for group_id, display_name in DEFAULT_BOSS_GROUPS.items():
-            self.create_group(group_id, display_name)
-        logger.info(f"✅ 已建立 {len(DEFAULT_BOSS_GROUPS)} 個預設群組")
+    def _load_config(self):
+        """載入配置（優先順序：JSON > 硬編碼 > 環境變數）"""
+        loaded = False
+        
+        # 1. 嘗試從 JSON 文件載入
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                for group_id, group_data in config.get('groups', {}).items():
+                    group = BossGroup.from_dict(group_id, group_data)
+                    group.set_save_callback(self._schedule_save)
+                    self.groups[group_id] = group
+                
+                logger.info(f"✅ 從 JSON 文件載入 {len(self.groups)} 個群組")
+                loaded = True
+            except Exception as e:
+                logger.error(f"❌ 載入 JSON 配置失敗: {e}")
+        
+        # 2. 如果 JSON 載入失敗，使用硬編碼配置
+        if not loaded:
+            logger.info("📦 使用硬編碼預設配置...")
+            for group_id, preset in PRESET_WEBHOOKS.items():
+                group = BossGroup(group_id, preset.get('display_name'))
+                group.send_mode = preset.get('send_mode', BossGroup.MODE_SYNC)
+                group.set_save_callback(self._schedule_save)
+                
+                for wh_preset in preset.get('webhooks', []):
+                    if wh_preset.get('url'):
+                        webhook = WebhookItem(
+                            url=wh_preset['url'],
+                            name=wh_preset.get('name'),
+                            webhook_type=wh_preset.get('type', 'discord'),
+                            enabled=wh_preset.get('enabled', True)
+                        )
+                        group.webhooks.append(webhook)
+                
+                self.groups[group_id] = group
+                wh_count = len(group.webhooks)
+                if wh_count > 0:
+                    logger.info(f"   ✅ {group_id} → {preset.get('display_name')} ({wh_count} webhooks)")
+                else:
+                    logger.info(f"   ✅ {group_id} → {preset.get('display_name')}")
+            
+            # 首次保存
+            self._save_config_sync()
+        
+        # 3. 從環境變數補充（可選）
+        self._load_from_env()
     
     def _load_from_env(self):
-        """從環境變數載入群組配置"""
+        """從環境變數載入補充配置"""
         try:
             if DEFAULT_GROUPS_JSON and DEFAULT_GROUPS_JSON != '{}':
                 groups_config = json.loads(DEFAULT_GROUPS_JSON)
                 for group_id, webhooks in groups_config.items():
                     group = self.get_or_create_group(group_id)
                     for webhook_url in webhooks:
-                        group.add_webhook(webhook_url)
-                logger.info(f"✅ 從環境變數載入配置")
+                        # 避免重複添加
+                        exists = any(wh.url == webhook_url for wh in group.webhooks)
+                        if not exists:
+                            group.add_webhook(webhook_url)
         except json.JSONDecodeError as e:
             logger.error(f"❌ 解析 WEBHOOK_GROUPS 失敗: {e}")
     
+    def _schedule_save(self):
+        """排程保存（防抖動，延遲2秒）"""
+        with self._save_lock:
+            if self._save_timer:
+                self._save_timer.cancel()
+            self._save_timer = threading.Timer(2.0, self._save_config_sync)
+            self._save_timer.start()
+    
+    def _save_config_sync(self):
+        """同步保存配置到 JSON 文件"""
+        try:
+            config = {
+                "version": "4.1",
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "groups": {}
+            }
+            
+            with self.lock:
+                for group_id, group in self.groups.items():
+                    config["groups"][group_id] = group.to_save_dict()
+            
+            # 先寫入臨時文件，再重命名（原子操作）
+            temp_file = CONFIG_FILE + ".tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            
+            os.replace(temp_file, CONFIG_FILE)
+            logger.info(f"💾 配置已保存到 {CONFIG_FILE}")
+            
+        except Exception as e:
+            logger.error(f"❌ 保存配置失敗: {e}")
+    
     def create_group(self, group_id: str, display_name: str = None) -> BossGroup:
-        """建立新群組"""
         with self.lock:
             clean_id = re.sub(r'[^a-zA-Z0-9_]', '', group_id.lower())
             if not clean_id:
                 clean_id = "default"
             
             if clean_id not in self.groups:
-                self.groups[clean_id] = BossGroup(clean_id, display_name)
-                logger.info(f"🆕 建立群組: {clean_id} ({display_name or clean_id})")
+                group = BossGroup(clean_id, display_name)
+                group.set_save_callback(self._schedule_save)
+                self.groups[clean_id] = group
+                logger.info(f"🆕 建立群組: {clean_id}")
+                self._schedule_save()
             
             return self.groups[clean_id]
     
@@ -616,6 +707,7 @@ class WebhookRelayManager:
             if group_id.lower() in self.groups:
                 del self.groups[group_id.lower()]
                 logger.info(f"🗑️ 刪除群組: {group_id}")
+                self._schedule_save()
                 return True
             return False
     
@@ -635,8 +727,13 @@ class WebhookRelayManager:
             "total_sent": total_sent,
             "total_failed": total_failed,
             "success_rate": f"{(total_sent / max(1, total_received) * 100):.1f}%",
+            "config_file": CONFIG_FILE,
             "groups": [g.get_stats() for g in self.groups.values()]
         }
+    
+    def force_save(self):
+        """強制立即保存"""
+        self._save_config_sync()
 
 
 # 建立全域管理器
@@ -674,7 +771,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔄 Webhook 中繼站 v4.0</title>
+    <title>🔄 Webhook 中繼站 v4.1</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -699,6 +796,12 @@ HTML_TEMPLATE = '''
             color: #888;
             margin-bottom: 20px;
             font-size: 0.9em;
+        }
+        .config-info {
+            text-align: center;
+            font-size: 0.75em;
+            color: #666;
+            margin-bottom: 15px;
         }
         
         .card {
@@ -849,79 +952,32 @@ HTML_TEMPLATE = '''
             align-items: center;
             gap: 8px;
         }
-        .webhook-url { 
-            font-family: monospace; 
-            font-size: 0.75em; 
-            opacity: 0.5; 
-            word-break: break-all;
-            margin-top: 4px;
-        }
-        .webhook-stats { 
-            font-size: 0.75em; 
-            opacity: 0.6;
-            margin-top: 4px;
-        }
-        .webhook-controls {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
+        .webhook-url { font-family: monospace; font-size: 0.75em; opacity: 0.5; word-break: break-all; margin-top: 4px; }
+        .webhook-stats { font-size: 0.75em; opacity: 0.6; margin-top: 4px; }
+        .webhook-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
         
-        .toggle-switch {
-            position: relative;
-            width: 44px;
-            height: 24px;
-        }
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
+        .toggle-switch { position: relative; width: 44px; height: 24px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
         .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #555;
-            transition: 0.3s;
-            border-radius: 24px;
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #555; transition: 0.3s; border-radius: 24px;
         }
         .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: 0.3s;
-            border-radius: 50%;
+            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background-color: white; transition: 0.3s; border-radius: 50%;
         }
-        .toggle-switch input:checked + .toggle-slider {
-            background: linear-gradient(135deg, #00ff88, #00cc66);
-        }
-        .toggle-switch input:checked + .toggle-slider:before {
-            transform: translateX(20px);
-        }
+        .toggle-switch input:checked + .toggle-slider { background: linear-gradient(135deg, #00ff88, #00cc66); }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
         
         .btn {
             background: linear-gradient(135deg, #00d4ff, #0088ff);
-            border: none;
-            color: #fff;
-            padding: 7px 12px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 0.8em;
-            transition: all 0.2s;
+            border: none; color: #fff; padding: 7px 12px; border-radius: 5px;
+            cursor: pointer; font-size: 0.8em; transition: all 0.2s;
         }
         .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,212,255,0.3); }
         .btn-danger { background: linear-gradient(135deg, #ff4757, #ff2f2f); }
         .btn-success { background: linear-gradient(135deg, #00ff88, #00cc66); }
         .btn-purple { background: linear-gradient(135deg, #a855f7, #7c3aed); }
-        .btn-feishu { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
         .btn-sm { padding: 4px 8px; font-size: 0.75em; }
         
         input[type="text"], select {
@@ -946,11 +1002,7 @@ HTML_TEMPLATE = '''
             padding: 12px;
             margin: 10px 0;
         }
-        .add-webhook-form .title {
-            font-size: 0.9em;
-            color: #00d4ff;
-            margin-bottom: 10px;
-        }
+        .add-webhook-form .title { font-size: 0.9em; color: #00d4ff; margin-bottom: 10px; }
         
         .history-item {
             background: rgba(255,255,255,0.02);
@@ -960,67 +1012,40 @@ HTML_TEMPLATE = '''
             font-size: 0.75em;
         }
         .history-item .time { color: #00d4ff; font-family: monospace; }
-        .history-item .mode-tag {
-            background: rgba(255,255,255,0.1);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.85em;
-        }
+        .history-item .mode-tag { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
         
-        .badge {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 6px;
-            font-size: 0.65em;
-            font-weight: bold;
-        }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 6px; font-size: 0.65em; font-weight: bold; }
         .badge-discord { background: #5865F2; color: #fff; }
         .badge-feishu { background: #3b82f6; color: #fff; }
         .badge-next { background: #00ff88; color: #000; }
         .badge-img { background: #ff88ff; color: #000; }
         .badge-sync { background: #00d4ff; color: #000; }
         .badge-rr { background: #ff88ff; color: #000; }
+        .badge-saved { background: #00ff88; color: #000; }
         
         .copy-btn {
-            background: transparent;
-            border: 1px solid rgba(255,255,255,0.3);
-            color: #fff;
-            padding: 3px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.75em;
+            background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+            padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75em;
         }
         .copy-btn:hover { background: rgba(255,255,255,0.1); }
         
         .section-title {
-            font-size: 0.9em;
-            color: #00d4ff;
-            margin: 15px 0 10px 0;
-            padding-bottom: 5px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            font-size: 0.9em; color: #00d4ff; margin: 15px 0 10px 0;
+            padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,0.1);
         }
         
-        .no-data { 
-            opacity: 0.4; 
-            font-size: 0.8em; 
-            padding: 15px; 
-            text-align: center;
-            background: rgba(0,0,0,0.1);
-            border-radius: 6px;
-        }
+        .no-data { opacity: 0.4; font-size: 0.8em; padding: 15px; text-align: center; background: rgba(0,0,0,0.1); border-radius: 6px; }
         
         .mode-info {
-            background: rgba(0,212,255,0.1);
-            border: 1px solid rgba(0,212,255,0.3);
-            border-radius: 6px;
-            padding: 10px;
-            font-size: 0.8em;
-            margin: 10px 0;
+            background: rgba(0,212,255,0.1); border: 1px solid rgba(0,212,255,0.3);
+            border-radius: 6px; padding: 10px; font-size: 0.8em; margin: 10px 0;
         }
-        .mode-info.sync { border-color: rgba(0,212,255,0.3); }
-        .mode-info.round_robin { 
-            background: rgba(255,136,255,0.1);
-            border-color: rgba(255,136,255,0.3); 
+        .mode-info.round_robin { background: rgba(255,136,255,0.1); border-color: rgba(255,136,255,0.3); }
+        
+        .save-indicator {
+            position: fixed; bottom: 20px; right: 20px;
+            background: rgba(0,255,136,0.9); color: #000; padding: 10px 20px;
+            border-radius: 8px; font-weight: bold; display: none; z-index: 1000;
         }
         
         @media (max-width: 600px) {
@@ -1032,8 +1057,9 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <div class="container">
-        <h1>🔄 Webhook 中繼站 v4.0</h1>
-        <p class="subtitle">多模式版 | 運行: <span id="uptime">-</span></p>
+        <h1>🔄 Webhook 中繼站 v4.1</h1>
+        <p class="subtitle">持久化存儲版 | 運行: <span id="uptime">-</span></p>
+        <p class="config-info">💾 配置文件: <span id="configFile">-</span></p>
         
         <div class="card">
             <h2>📊 總覽統計</h2>
@@ -1078,24 +1104,32 @@ HTML_TEMPLATE = '''
         <div class="card">
             <h2>📖 使用說明</h2>
             <div style="font-size: 0.85em; line-height: 1.8;">
+                <p><strong>💾 持久化存儲：</strong></p>
+                <ul style="margin-left: 20px; margin-bottom: 10px;">
+                    <li>所有配置自動保存到 JSON 文件</li>
+                    <li>重啟後自動恢復所有 Webhook 設定</li>
+                    <li>也可在代碼中硬編碼預設配置</li>
+                </ul>
                 <p><strong>📡 發送模式：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
                     <li><span class="badge badge-sync">同步模式</span> 同時發送到所有啟用的 Webhook</li>
                     <li><span class="badge badge-rr">輪詢模式</span> 輪流發送到下一個啟用的 Webhook</li>
                 </ul>
-                <p><strong>✅ Webhook 管理：</strong></p>
-                <ul style="margin-left: 20px;">
-                    <li>使用開關啟用/禁用 Webhook，無需刪除</li>
-                    <li>可為每個 Webhook 設定自定義名稱</li>
-                    <li>支援 Discord 和飛書兩種類型</li>
-                </ul>
             </div>
         </div>
     </div>
     
+    <div class="save-indicator" id="saveIndicator">💾 已自動保存</div>
+    
     <script>
         const baseUrl = window.location.origin;
         let openGroups = new Set();
+        
+        function showSaveIndicator() {
+            const el = document.getElementById('saveIndicator');
+            el.style.display = 'block';
+            setTimeout(() => { el.style.display = 'none'; }, 2000);
+        }
         
         async function loadData() {
             try {
@@ -1108,6 +1142,7 @@ HTML_TEMPLATE = '''
                 document.getElementById('totalSent').textContent = data.total_sent;
                 document.getElementById('totalFailed').textContent = data.total_failed;
                 document.getElementById('successRate').textContent = data.success_rate;
+                document.getElementById('configFile').textContent = data.config_file || '-';
                 
                 renderGroups(data.groups);
             } catch (e) { console.error(e); }
@@ -1115,7 +1150,6 @@ HTML_TEMPLATE = '''
         
         function renderGroups(groups) {
             const container = document.getElementById('groupList');
-            
             if (!groups || groups.length === 0) {
                 container.innerHTML = '<div class="no-data">尚未建立任何群組</div>';
                 return;
@@ -1127,9 +1161,7 @@ HTML_TEMPLATE = '''
                         <div class="group-title">
                             <span>${g.display_name}</span>
                             <span class="id">${g.group_id}</span>
-                            <span class="badge ${g.send_mode === 'sync' ? 'badge-sync' : 'badge-rr'}">
-                                ${g.send_mode_name}
-                            </span>
+                            <span class="badge ${g.send_mode === 'sync' ? 'badge-sync' : 'badge-rr'}">${g.send_mode_name}</span>
                         </div>
                         <div class="group-stats-mini">
                             <span>📥${g.received}</span>
@@ -1139,7 +1171,6 @@ HTML_TEMPLATE = '''
                         </div>
                     </div>
                     <div class="group-body ${openGroups.has(g.group_id) ? 'open' : ''}" id="group-${g.group_id}">
-                        
                         <div class="section-title">📡 接收端點</div>
                         <div class="endpoint-box">
                             <span>${baseUrl}/webhook/${g.group_id}</span>
@@ -1148,23 +1179,14 @@ HTML_TEMPLATE = '''
                         
                         <div class="section-title">⚙️ 發送模式</div>
                         <div class="mode-selector">
-                            <button class="mode-btn ${g.send_mode === 'sync' ? 'active' : ''}" 
-                                    onclick="setMode('${g.group_id}', 'sync')">
-                                🔄 同步模式
-                            </button>
-                            <button class="mode-btn ${g.send_mode === 'round_robin' ? 'active-rr' : ''}" 
-                                    onclick="setMode('${g.group_id}', 'round_robin')">
-                                🎯 輪詢模式
-                            </button>
+                            <button class="mode-btn ${g.send_mode === 'sync' ? 'active' : ''}" onclick="setMode('${g.group_id}', 'sync')">🔄 同步模式</button>
+                            <button class="mode-btn ${g.send_mode === 'round_robin' ? 'active-rr' : ''}" onclick="setMode('${g.group_id}', 'round_robin')">🎯 輪詢模式</button>
                         </div>
                         <div class="mode-info ${g.send_mode}">
-                            ${g.send_mode === 'sync' 
-                                ? '💡 同步模式：每次通知會同時發送到所有<strong>啟用</strong>的 Webhook'
-                                : '💡 輪詢模式：每次通知會輪流發送到下一個<strong>啟用</strong>的 Webhook'}
+                            ${g.send_mode === 'sync' ? '💡 同步模式：每次通知會同時發送到所有<strong>啟用</strong>的 Webhook' : '💡 輪詢模式：每次通知會輪流發送到下一個<strong>啟用</strong>的 Webhook'}
                         </div>
                         
                         <div class="section-title">🔗 Webhook 列表 (${g.webhooks_enabled}/${g.webhooks_total} 啟用)</div>
-                        
                         <div class="add-webhook-form">
                             <div class="title">➕ 添加新 Webhook</div>
                             <div class="flex-row">
@@ -1182,16 +1204,13 @@ HTML_TEMPLATE = '''
                             <div class="webhook-item ${!w.enabled ? 'disabled' : ''} ${g.send_mode === 'round_robin' && w.enabled && isNextWebhook(g, w.id) ? 'next' : ''}">
                                 <div class="webhook-header">
                                     <div class="webhook-name">
-                                        <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : 'badge-feishu'}">
-                                            ${w.webhook_type === 'discord' ? '🔵 Discord' : '📱 飛書'}
-                                        </span>
+                                        <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : 'badge-feishu'}">${w.webhook_type === 'discord' ? '🔵 Discord' : '📱 飛書'}</span>
                                         <span>${w.name}</span>
                                         ${g.send_mode === 'round_robin' && w.enabled && isNextWebhook(g, w.id) ? '<span class="badge badge-next">下一個</span>' : ''}
                                     </div>
                                     <div class="webhook-controls">
-                                        <label class="toggle-switch" title="${w.enabled ? '點擊禁用' : '點擊啟用'}">
-                                            <input type="checkbox" ${w.enabled ? 'checked' : ''} 
-                                                   onchange="toggleWebhook('${g.group_id}', '${w.id}', this.checked)">
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="toggleWebhook('${g.group_id}', '${w.id}', this.checked)">
                                             <span class="toggle-slider"></span>
                                         </label>
                                         <button class="btn btn-purple btn-sm" onclick="renameWebhook('${g.group_id}', '${w.id}', '${w.name}')">✏️</button>
@@ -1200,7 +1219,7 @@ HTML_TEMPLATE = '''
                                     </div>
                                 </div>
                                 <div class="webhook-url">${w.url_preview}</div>
-                                <div class="webhook-stats">✅ 成功: ${w.sent} | ❌ 失敗: ${w.failed} | 📅 ${w.created_at}</div>
+                                <div class="webhook-stats">✅ ${w.sent} | ❌ ${w.failed} | 📅 ${w.created_at}</div>
                             </div>
                         `).join('') : '<div class="no-data">尚未添加任何 Webhook</div>'}
                         
@@ -1208,11 +1227,7 @@ HTML_TEMPLATE = '''
                         ${g.history && g.history.length ? g.history.slice(0, 8).map(h => `
                             <div class="history-item">
                                 <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px;">
-                                    <span>
-                                        <span class="time">${h.time}</span>
-                                        <span class="mode-tag">${h.mode}</span>
-                                        ${h.has_image ? '<span class="badge badge-img">📷</span>' : ''}
-                                    </span>
+                                    <span><span class="time">${h.time}</span> <span class="mode-tag">${h.mode}</span> ${h.has_image ? '<span class="badge badge-img">📷</span>' : ''}</span>
                                     <span>${h.status}</span>
                                 </div>
                                 <div style="opacity: 0.6; margin-top: 4px;">${h.content}</div>
@@ -1229,17 +1244,16 @@ HTML_TEMPLATE = '''
         }
         
         function isNextWebhook(group, webhookId) {
-            const enabledWebhooks = group.webhooks.filter(w => w.enabled);
-            if (enabledWebhooks.length === 0) return false;
-            const idx = group.current_index % enabledWebhooks.length;
-            return enabledWebhooks[idx] && enabledWebhooks[idx].id === webhookId;
+            const enabled = group.webhooks.filter(w => w.enabled);
+            if (enabled.length === 0) return false;
+            const idx = group.current_index % enabled.length;
+            return enabled[idx] && enabled[idx].id === webhookId;
         }
         
         function toggleGroup(groupId) {
             if (openGroups.has(groupId)) openGroups.delete(groupId);
             else openGroups.add(groupId);
-            const el = document.getElementById(`group-${groupId}`);
-            if (el) el.classList.toggle('open');
+            document.getElementById(`group-${groupId}`)?.classList.toggle('open');
         }
         
         function copyText(text) {
@@ -1263,14 +1277,16 @@ HTML_TEMPLATE = '''
                 document.getElementById('newGroupId').value = '';
                 document.getElementById('newGroupName').value = '';
                 openGroups.add(groupId.toLowerCase());
+                showSaveIndicator();
                 loadData();
             } else alert('❌ ' + result.message);
         }
         
         async function deleteGroup(groupId) {
-            if (!confirm(`確定刪除群組 [${groupId}]？所有 Webhook 配置將被刪除！`)) return;
+            if (!confirm(`確定刪除群組 [${groupId}]？`)) return;
             await fetch(`/api/group/${groupId}`, { method: 'DELETE' });
             openGroups.delete(groupId);
+            showSaveIndicator();
             loadData();
         }
         
@@ -1281,7 +1297,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify({ mode })
             });
             const result = await res.json();
-            if (result.success) loadData();
+            if (result.success) { showSaveIndicator(); loadData(); }
             else alert('❌ ' + result.message);
         }
         
@@ -1289,7 +1305,6 @@ HTML_TEMPLATE = '''
             const name = document.getElementById(`webhook-name-${groupId}`).value.trim();
             const type = document.getElementById(`webhook-type-${groupId}`).value;
             const url = document.getElementById(`webhook-url-${groupId}`).value.trim();
-            
             if (!url) return alert('請輸入 Webhook URL');
             
             const res = await fetch(`/api/group/${groupId}/webhook`, {
@@ -1302,47 +1317,45 @@ HTML_TEMPLATE = '''
             if (result.success) {
                 document.getElementById(`webhook-name-${groupId}`).value = '';
                 document.getElementById(`webhook-url-${groupId}`).value = '';
+                showSaveIndicator();
                 loadData();
             } else alert('❌ ' + result.message);
         }
         
         async function removeWebhook(groupId, webhookId) {
-            if (!confirm('確定移除此 Webhook？')) return;
+            if (!confirm('確定移除？')) return;
             await fetch(`/api/group/${groupId}/webhook/${webhookId}`, { method: 'DELETE' });
+            showSaveIndicator();
             loadData();
         }
         
         async function toggleWebhook(groupId, webhookId, enabled) {
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/toggle`, {
+            await fetch(`/api/group/${groupId}/webhook/${webhookId}/toggle`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ enabled })
             });
-            const result = await res.json();
-            if (!result.success) alert('❌ ' + result.message);
+            showSaveIndicator();
             loadData();
         }
         
         async function renameWebhook(groupId, webhookId, currentName) {
             const newName = prompt('請輸入新名稱:', currentName);
             if (!newName || newName === currentName) return;
-            
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}`, {
+            await fetch(`/api/group/${groupId}/webhook/${webhookId}`, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ name: newName })
             });
-            const result = await res.json();
-            if (result.success) loadData();
-            else alert('❌ ' + result.message);
+            showSaveIndicator();
+            loadData();
         }
         
         async function testWebhook(groupId, webhookId) {
-            const content = `[測試] 單獨測試 - ${new Date().toLocaleTimeString()}`;
             const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/test`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ content: `[測試] ${new Date().toLocaleTimeString()}` })
             });
             const result = await res.json();
             alert(result.success ? '✅ 測試成功！' : `❌ ${result.message}`);
@@ -1352,7 +1365,6 @@ HTML_TEMPLATE = '''
         async function testGroup(groupId) {
             const content = prompt('測試訊息:', `[測試] ${groupId.toUpperCase()} BOSS 通知`);
             if (!content) return;
-            
             const res = await fetch(`/webhook/${groupId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1363,11 +1375,9 @@ HTML_TEMPLATE = '''
             loadData();
         }
         
-        // Enter 鍵提交
         document.getElementById('newGroupId').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
         document.getElementById('newGroupName').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
         
-        // 初始加載和自動刷新
         loadData();
         setInterval(loadData, 5000);
     </script>
@@ -1382,75 +1392,51 @@ HTML_TEMPLATE = '''
 @app.route('/')
 @requires_auth
 def index():
-    """Web 管理介面"""
     return render_template_string(HTML_TEMPLATE)
 
 
 @app.route('/webhook/<group_id>', methods=['POST'])
 def receive_webhook(group_id):
-    """接收指定群組的 Webhook"""
     try:
         source_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
         if ',' in source_ip:
             source_ip = source_ip.split(',')[0].strip()
         
         group = manager.get_or_create_group(group_id)
-        
         content = ""
         image_data = None
         
-        # 解析請求
         if request.is_json:
             data = request.get_json()
             content = data.get('content', '')
-            
-            # 支援 attachments 陣列
             attachments = data.get('attachments', [])
-            if attachments and len(attachments) > 0:
+            if attachments:
                 image_url = attachments[0].get('url', '')
                 if image_url:
                     if os.path.exists(image_url):
-                        try:
-                            with open(image_url, 'rb') as f:
-                                image_data = f.read()
-                        except Exception as e:
-                            logger.error(f"[{group_id}] ❌ 讀取本地圖片失敗: {e}")
+                        with open(image_url, 'rb') as f:
+                            image_data = f.read()
                     elif image_url.startswith(('http://', 'https://')):
                         try:
                             resp = requests.get(image_url, timeout=30)
                             if resp.status_code == 200:
                                 image_data = resp.content
-                        except Exception as e:
-                            logger.error(f"[{group_id}] ❌ 下載遠程圖片失敗: {e}")
+                        except:
+                            pass
         else:
             content = request.form.get('content', '')
             if 'file' in request.files:
-                file = request.files['file']
-                if file:
-                    image_data = file.read()
+                image_data = request.files['file'].read()
         
         if not content and not image_data:
             return jsonify({"success": False, "message": "無內容"}), 400
         
-        # 記錄日誌
-        log_content = content[:50] + "..." if len(content) > 50 else content
-        logger.info(f"[{group_id}] 📥 收到消息: {log_content}")
-        if image_data:
-            logger.info(f"[{group_id}] 📷 包含圖片: {len(image_data) / 1024:.2f} KB")
-        
-        # 中繼消息
+        logger.info(f"[{group_id}] 📥 {content[:50]}...")
         success, message, details = group.relay_message(content, image_data, source_ip)
         
-        return jsonify({
-            "success": success,
-            "message": message,
-            "group_id": group_id,
-            "mode": group.send_mode,
-            "details": details
-        })
-        
+        return jsonify({"success": success, "message": message, "group_id": group_id, "mode": group.send_mode, "details": details})
     except Exception as e:
-        logger.error(f"❌ [{group_id}] 處理請求失敗: {e}")
+        logger.error(f"❌ [{group_id}] {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -1471,13 +1457,10 @@ def create_group():
     data = request.get_json()
     group_id = data.get('group_id', '').strip()
     display_name = data.get('display_name')
-    
     if not group_id:
         return jsonify({"success": False, "message": "請提供群組 ID"})
-    
     if manager.get_group(group_id):
         return jsonify({"success": False, "message": "此群組 ID 已存在"})
-    
     manager.create_group(group_id, display_name)
     return jsonify({"success": True, "message": "建立成功"})
 
@@ -1485,105 +1468,76 @@ def create_group():
 @app.route('/api/group/<group_id>', methods=['DELETE'])
 @requires_auth
 def delete_group(group_id):
-    success = manager.delete_group(group_id)
-    return jsonify({"success": success})
+    return jsonify({"success": manager.delete_group(group_id)})
 
 
 @app.route('/api/group/<group_id>/mode', methods=['POST'])
 @requires_auth
 def set_group_mode(group_id):
-    """設置群組發送模式"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
-    
     data = request.get_json()
-    mode = data.get('mode', '').strip()
-    success, message = group.set_send_mode(mode)
+    success, message = group.set_send_mode(data.get('mode', ''))
     return jsonify({"success": success, "message": message})
 
 
 @app.route('/api/group/<group_id>/webhook', methods=['POST'])
 @requires_auth
 def add_webhook_to_group(group_id):
-    """添加 Webhook 到群組"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
-    
     data = request.get_json()
-    url = data.get('url', '').strip()
-    name = data.get('name', '').strip() or None
-    webhook_type = data.get('webhook_type', 'discord')
-    
-    success, message = group.add_webhook(url, name, webhook_type)
+    success, message = group.add_webhook(data.get('url', '').strip(), data.get('name'), data.get('webhook_type', 'discord'))
     return jsonify({"success": success, "message": message})
 
 
 @app.route('/api/group/<group_id>/webhook/<webhook_id>', methods=['DELETE'])
 @requires_auth
 def remove_webhook_from_group(group_id, webhook_id):
-    """移除 Webhook"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
-    
-    success = group.remove_webhook(webhook_id)
-    return jsonify({"success": success})
+    return jsonify({"success": group.remove_webhook(webhook_id)})
 
 
 @app.route('/api/group/<group_id>/webhook/<webhook_id>', methods=['PATCH'])
 @requires_auth
 def update_webhook(group_id, webhook_id):
-    """更新 Webhook（重命名）"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
-    
     data = request.get_json()
-    name = data.get('name', '').strip()
-    
-    success, message = group.update_webhook(webhook_id, name)
+    success, message = group.update_webhook(webhook_id, data.get('name'))
     return jsonify({"success": success, "message": message})
 
 
 @app.route('/api/group/<group_id>/webhook/<webhook_id>/toggle', methods=['POST'])
 @requires_auth
 def toggle_webhook(group_id, webhook_id):
-    """啟用/禁用 Webhook"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
-    
     data = request.get_json()
-    enabled = data.get('enabled', True)
-    
-    success, message = group.toggle_webhook(webhook_id, enabled)
+    success, message = group.toggle_webhook(webhook_id, data.get('enabled', True))
     return jsonify({"success": success, "message": message})
 
 
 @app.route('/api/group/<group_id>/webhook/<webhook_id>/test', methods=['POST'])
 @requires_auth
 def test_single_webhook(group_id, webhook_id):
-    """測試單個 Webhook"""
     group = manager.get_group(group_id)
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
     
-    # 找到指定的 Webhook
-    webhook = None
-    for wh in group.webhooks:
-        if wh.id == webhook_id:
-            webhook = wh
-            break
-    
+    webhook = next((wh for wh in group.webhooks if wh.id == webhook_id), None)
     if not webhook:
         return jsonify({"success": False, "message": "找不到此 Webhook"})
     
     data = request.get_json()
     content = data.get('content', f'[測試] {webhook.name}')
     
-    # 發送測試
     if webhook.webhook_type == 'discord':
         success = MessageSender.send_to_discord(webhook.url, content)
     else:
@@ -1594,20 +1548,20 @@ def test_single_webhook(group_id, webhook_id):
     else:
         webhook.stats["failed"] += 1
     
-    return jsonify({
-        "success": success,
-        "message": "發送成功" if success else "發送失敗"
-    })
+    return jsonify({"success": success, "message": "發送成功" if success else "發送失敗"})
+
+
+@app.route('/api/save', methods=['POST'])
+@requires_auth
+def force_save():
+    """強制保存配置"""
+    manager.force_save()
+    return jsonify({"success": True, "message": "已保存"})
 
 
 @app.route('/health')
 def health():
-    return jsonify({
-        "status": "ok",
-        "version": "4.0",
-        "groups": len(manager.groups),
-        "features": ["sync_mode", "round_robin_mode", "webhook_toggle", "webhook_naming"]
-    })
+    return jsonify({"status": "ok", "version": "4.1", "groups": len(manager.groups), "config_file": CONFIG_FILE})
 
 
 # ================================================================================
@@ -1616,27 +1570,21 @@ def health():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("  🔄 Webhook 中繼站 v4.0 - 多模式版")
+    print("  🔄 Webhook 中繼站 v4.1 - 持久化存儲版")
     print("=" * 60)
     print(f"  📡 本地訪問: http://localhost:{PORT}")
+    print(f"  💾 配置文件: {CONFIG_FILE}")
     print(f"  🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
     print("=" * 60)
     print()
     print("  🆕 新功能:")
-    print("    - 同步模式：同時發送到所有啟用的 Webhook")
-    print("    - 輪詢模式：輪流發送到啟用的 Webhook")
-    print("    - Webhook 啟用/禁用開關（無需刪除）")
-    print("    - 自定義 Webhook 名稱")
-    print("    - 統一管理 Discord 和飛書 Webhook")
+    print("    - 自動保存配置到 JSON 文件")
+    print("    - 重啟後自動恢復所有設定")
+    print("    - 支援硬編碼預設 Webhook")
+    print("    - 程式結束時自動保存")
     print()
-    print("  🎯 預設 BOSS 群組:")
-    for gid, name in DEFAULT_BOSS_GROUPS.items():
-        print(f"    /webhook/{gid} → {name}")
+    print("  📝 硬編碼配置方式:")
+    print("    編輯 PRESET_WEBHOOKS 字典即可")
     print("=" * 60)
     
-    app.run(
-        host='0.0.0.0',
-        port=PORT,
-        debug=False,
-        threaded=True
-    )
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
