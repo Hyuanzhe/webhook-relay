@@ -176,6 +176,25 @@ PRESET_WEBHOOKS = {
             },
         ]
     },
+    # ============ 群組 ss: 書生 ============
+    "ss": {
+        "display_name": "書生",
+        "send_mode": "sync",
+        "webhooks": [
+            {
+                "name": "書生",
+                "url": "https://discordapp.com/api/webhooks/1451812376440606762/UJOjrJgGMsi1T45WqoeX3nI5HbzDdV74Dbzbw2-MBWuJhpktDc77y3q_NzNlDnGgnp6B",
+                "type": "discord",
+                "enabled": True
+            },
+            {
+                "name": "書生飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/a5ff3842-fbeb-4508-87cf-8e8e62824044",
+                "type": "feishu",
+                "enabled": True
+            },
+        ]
+    },
 }
 
 # ================================================================================
