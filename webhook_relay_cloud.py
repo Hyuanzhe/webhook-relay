@@ -2,16 +2,21 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-    🔄 Webhook 中繼站 v4.1 - 持久化存儲版
+    🔄 Webhook 中繼站 v4.2 - 企業微信支援版
 ================================================================================
 
 核心功能：
-    - 🆕 JSON 文件持久化存儲（自動保存/載入配置）
-    - 🆕 支援硬編碼預設 Webhook（重啟自動恢復）
+    - 🆕 支援企業微信 (WeCom) Webhook 機器人
+    - JSON 文件持久化存儲（自動保存/載入配置）
+    - 支援硬編碼預設 Webhook（重啟自動恢復）
     - 兩種發送模式：同步模式 / 輪詢模式
     - Webhook 啟用/禁用開關（無需刪除）
     - 自定義 Webhook 名稱
-    - 支援 Discord 和飛書
+
+支援平台：
+    - 🔵 Discord
+    - 📱 飛書 (Feishu/Lark)
+    - 💚 企業微信 (WeCom) [新增]
 
 配置優先級：
     1. JSON 文件中的配置（如果存在）
@@ -19,7 +24,7 @@
     3. 環境變數 WEBHOOK_GROUPS
 
 作者: @yyv3vnn
-版本: 4.1
+版本: 4.2
 ================================================================================
 """
 
@@ -29,6 +34,7 @@ import threading
 import time
 import requests
 import hashlib
+import base64
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 from functools import wraps
@@ -75,6 +81,11 @@ def get_local_time_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
 # ================================================================================
 # 在這裡直接寫死你的 Webhook 配置，重啟後會自動載入
 # 如果 JSON 文件存在，會優先使用 JSON 文件的配置
+#
+# 支援的 type 類型：
+#   - "discord"  : Discord Webhook
+#   - "feishu"   : 飛書機器人
+#   - "wecom"    : 企業微信機器人 (新增)
 
 PRESET_WEBHOOKS = {
     # ============ 群組 A: 喵z ============
@@ -94,13 +105,20 @@ PRESET_WEBHOOKS = {
                 "type": "feishu",
                 "enabled": True
             },
+            # 企業微信範例（取消註解並填入你的 Webhook URL）
+            # {
+            #     "name": "喵z企業微信",
+            #     "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key",
+            #     "type": "wecom",
+            #     "enabled": True
+            # },
         ]
     },
     
     # ============ 群組 B: 蘑菇 ============
     "b": {
         "display_name": "蘑菇",
-        "send_mode": "sync",  # "sync" 或 "round_robin"
+        "send_mode": "sync",
         "webhooks": [
             {
                 "name": "蘑菇1車",
@@ -120,7 +138,7 @@ PRESET_WEBHOOKS = {
     # ============ 群組 C: 仙人 ============
     "c": {
         "display_name": "仙人娃娃",
-        "send_mode": "sync",  # "sync" 或 "round_robin"
+        "send_mode": "sync",
         "webhooks": [
             {
                 "name": "仙人娃娃1車",
@@ -174,9 +192,22 @@ PRESET_WEBHOOKS = {
                 "type": "feishu",
                 "enabled": True
             },
+            {
+                "name": "小巴二車飛書通知",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/a5ff3842-fbeb-4508-87cf-8e8e62824044",
+                "type": "feishu",
+                "enabled": True
+            },
+            {
+                "name": "小巴企業微信通知",
+                "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=c1fd1bc4-33b5-4e0c-b4b0-e6b814101048",
+                "type": "wecom",  # 重要：類型要填 wecom
+                "enabled": True
+            },
         ]
     },
-    # ============ 群組 ss: 書生 ============
+    
+    # ============ 群組 SS: 書生 ============
     "ss": {
         "display_name": "書生",
         "send_mode": "sync",
@@ -291,6 +322,9 @@ feishu_uploader = FeishuImageUploader()
 class WebhookItem:
     """單個 Webhook 項目"""
     
+    # 支援的 Webhook 類型
+    SUPPORTED_TYPES = ['discord', 'feishu', 'wecom']
+    
     def __init__(self, url: str, name: str = None, webhook_type: str = 'discord', 
                  enabled: bool = True, webhook_id: str = None):
         self.id = webhook_id or hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:8]
@@ -302,8 +336,15 @@ class WebhookItem:
         self.created_at = get_local_time_str()
     
     def _generate_default_name(self, webhook_type: str) -> str:
+        """生成預設名稱"""
         timestamp = get_local_time_str("%H%M%S")
-        return f"{'飛書' if webhook_type == 'feishu' else 'Discord'}-{timestamp}"
+        type_names = {
+            'discord': 'Discord',
+            'feishu': '飛書',
+            'wecom': '企業微信'
+        }
+        type_name = type_names.get(webhook_type, webhook_type)
+        return f"{type_name}-{timestamp}"
     
     def to_dict(self) -> dict:
         """轉換為字典（用於顯示）"""
@@ -351,10 +392,11 @@ class WebhookItem:
 # ================================================================================
 
 class MessageSender:
-    """消息發送器"""
+    """消息發送器 - 支援 Discord、飛書、企業微信"""
     
     @staticmethod
     def send_to_discord(webhook_url: str, content: str, image_data: bytes = None) -> bool:
+        """發送到 Discord"""
         try:
             if image_data:
                 files = {'file': ('screenshot.png', image_data, 'image/png')}
@@ -370,6 +412,7 @@ class MessageSender:
     
     @staticmethod
     def send_to_feishu(webhook_url: str, content: str, image_key: str = None) -> bool:
+        """發送到飛書"""
         try:
             content_blocks = []
             if content:
@@ -391,6 +434,107 @@ class MessageSender:
             return False
         except Exception as e:
             logger.error(f"❌ 飛書發送失敗: {e}")
+            return False
+    
+    @staticmethod
+    def send_to_wecom(webhook_url: str, content: str, image_data: bytes = None) -> bool:
+        """
+        發送到企業微信
+        
+        企業微信 Webhook 支援多種消息類型：
+        - text: 純文字
+        - markdown: Markdown 格式
+        - image: 圖片（base64）
+        - news: 圖文消息
+        """
+        try:
+            # 如果有圖片，先發送圖片
+            if image_data:
+                # 企業微信圖片需要 base64 編碼和 MD5
+                img_base64 = base64.b64encode(image_data).decode('utf-8')
+                img_md5 = hashlib.md5(image_data).hexdigest()
+                
+                image_payload = {
+                    "msgtype": "image",
+                    "image": {
+                        "base64": img_base64,
+                        "md5": img_md5
+                    }
+                }
+                
+                img_response = requests.post(
+                    webhook_url, 
+                    json=image_payload, 
+                    headers={'Content-Type': 'application/json'}, 
+                    timeout=30
+                )
+                
+                if img_response.status_code != 200:
+                    logger.error(f"❌ 企業微信圖片發送失敗: {img_response.text}")
+            
+            # 發送文字消息（使用 Markdown 格式更美觀）
+            if content:
+                # 構建 Markdown 格式消息
+                markdown_content = f"## 🎯 BOSS 通知\n\n{content}\n\n> ⏰ {get_local_time_str()}"
+                
+                text_payload = {
+                    "msgtype": "markdown",
+                    "markdown": {
+                        "content": markdown_content
+                    }
+                }
+                
+                response = requests.post(
+                    webhook_url, 
+                    json=text_payload, 
+                    headers={'Content-Type': 'application/json'}, 
+                    timeout=15
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # 企業微信成功返回 errcode = 0
+                    if result.get('errcode') == 0:
+                        return True
+                    else:
+                        logger.error(f"❌ 企業微信返回錯誤: {result}")
+                        return False
+                return False
+            
+            # 只有圖片沒有文字的情況
+            return image_data is not None
+            
+        except Exception as e:
+            logger.error(f"❌ 企業微信發送失敗: {e}")
+            return False
+    
+    @staticmethod
+    def send_to_wecom_text(webhook_url: str, content: str) -> bool:
+        """
+        發送純文字到企業微信（備用方法）
+        如果 Markdown 不支援，可以用這個
+        """
+        try:
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"🎯 BOSS 通知\n\n{content}\n\n⏰ {get_local_time_str()}"
+                }
+            }
+            
+            response = requests.post(
+                webhook_url, 
+                json=payload, 
+                headers={'Content-Type': 'application/json'}, 
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('errcode') == 0
+            return False
+        except Exception as e:
+            logger.error(f"❌ 企業微信純文字發送失敗: {e}")
             return False
 
 
@@ -441,8 +585,8 @@ class BossGroup:
             for wh in self.webhooks:
                 if wh.url == url:
                     return False, "此 Webhook URL 已存在"
-            if webhook_type not in ['discord', 'feishu']:
-                return False, "類型必須是 'discord' 或 'feishu'"
+            if webhook_type not in WebhookItem.SUPPORTED_TYPES:
+                return False, f"類型必須是 {', '.join(WebhookItem.SUPPORTED_TYPES)} 之一"
             
             webhook = WebhookItem(url, name, webhook_type, enabled=True)
             self.webhooks.append(webhook)
@@ -498,15 +642,25 @@ class BossGroup:
         timestamp = get_local_time_str()
         results = []
         
+        # 預先上傳飛書圖片（如果有圖片且有飛書 webhook）
         feishu_image_key = None
         if image_data:
-            feishu_image_key = feishu_uploader.upload_image(image_data)
+            has_feishu = any(wh.webhook_type == 'feishu' and wh.enabled for wh in self.webhooks)
+            if has_feishu:
+                feishu_image_key = feishu_uploader.upload_image(image_data)
         
         with self.lock:
             if self.send_mode == self.MODE_SYNC:
                 enabled_webhooks = self.get_enabled_webhooks()
                 if not enabled_webhooks:
-                    self.history.appendleft({"time": timestamp, "content": content[:50], "status": "⚠️ 無啟用的 Webhook", "source": source_ip[-15:], "has_image": bool(image_data), "mode": "同步"})
+                    self.history.appendleft({
+                        "time": timestamp, 
+                        "content": content[:50], 
+                        "status": "⚠️ 無啟用的 Webhook", 
+                        "source": source_ip[-15:], 
+                        "has_image": bool(image_data), 
+                        "mode": "同步"
+                    })
                     return False, "無啟用的 Webhook", []
                 for wh in enabled_webhooks:
                     success = self._send_to_webhook(wh, content, image_data, feishu_image_key)
@@ -514,7 +668,14 @@ class BossGroup:
             else:
                 webhook = self.get_next_webhook_round_robin()
                 if not webhook:
-                    self.history.appendleft({"time": timestamp, "content": content[:50], "status": "⚠️ 無啟用的 Webhook", "source": source_ip[-15:], "has_image": bool(image_data), "mode": "輪詢"})
+                    self.history.appendleft({
+                        "time": timestamp, 
+                        "content": content[:50], 
+                        "status": "⚠️ 無啟用的 Webhook", 
+                        "source": source_ip[-15:], 
+                        "has_image": bool(image_data), 
+                        "mode": "輪詢"
+                    })
                     return False, "無啟用的 Webhook", []
                 success = self._send_to_webhook(webhook, content, image_data, feishu_image_key)
                 results.append({"name": webhook.name, "type": webhook.webhook_type, "success": success})
@@ -524,26 +685,48 @@ class BossGroup:
         self.stats["total_sent"] += success_count
         self.stats["total_failed"] += fail_count
         
-        status_parts = [f"{'✅' if r['success'] else '❌'}{'🔵' if r['type'] == 'discord' else '📱'}{r['name'][:8]}" for r in results]
+        # 生成狀態顯示（加入企業微信的圖標）
+        type_icons = {
+            'discord': '🔵',
+            'feishu': '📱',
+            'wecom': '💚'
+        }
+        status_parts = [
+            f"{'✅' if r['success'] else '❌'}{type_icons.get(r['type'], '❓')}{r['name'][:8]}" 
+            for r in results
+        ]
         mode_name = "同步" if self.send_mode == self.MODE_SYNC else "輪詢"
         
-        self.history.appendleft({"time": timestamp, "content": content[:50] + "..." if len(content) > 50 else content, "status": " | ".join(status_parts), "source": source_ip[-15:], "has_image": bool(image_data), "mode": mode_name})
+        self.history.appendleft({
+            "time": timestamp, 
+            "content": content[:50] + "..." if len(content) > 50 else content, 
+            "status": " | ".join(status_parts), 
+            "source": source_ip[-15:], 
+            "has_image": bool(image_data), 
+            "mode": mode_name
+        })
         
         return success_count > 0, f"[{mode_name}] 成功: {success_count}, 失敗: {fail_count}", results
     
     def _send_to_webhook(self, webhook: WebhookItem, content: str, image_data: bytes, feishu_image_key: str) -> bool:
+        """發送消息到指定的 Webhook"""
         try:
             if webhook.webhook_type == 'discord':
                 success = MessageSender.send_to_discord(webhook.url, content, image_data)
-            else:
+            elif webhook.webhook_type == 'feishu':
                 success = MessageSender.send_to_feishu(webhook.url, content, feishu_image_key)
+            elif webhook.webhook_type == 'wecom':
+                success = MessageSender.send_to_wecom(webhook.url, content, image_data)
+            else:
+                logger.error(f"[{self.group_id}] ❓ 未知的 Webhook 類型: {webhook.webhook_type}")
+                success = False
             
             if success:
                 webhook.stats["sent"] += 1
-                logger.info(f"[{self.group_id}] ✅ → {webhook.name}")
+                logger.info(f"[{self.group_id}] ✅ → {webhook.name} ({webhook.webhook_type})")
             else:
                 webhook.stats["failed"] += 1
-                logger.error(f"[{self.group_id}] ❌ → {webhook.name}")
+                logger.error(f"[{self.group_id}] ❌ → {webhook.name} ({webhook.webhook_type})")
             return success
         except Exception as e:
             webhook.stats["failed"] += 1
@@ -611,11 +794,12 @@ class WebhookRelayManager:
         atexit.register(self._save_config_sync)
         
         logger.info("=" * 60)
-        logger.info("🔄 Webhook 中繼站 v4.1 (持久化存儲版) 已啟動")
+        logger.info("🔄 Webhook 中繼站 v4.2 (企業微信支援版) 已啟動")
         logger.info(f"📡 已配置 {len(self.groups)} 個 BOSS 群組")
         logger.info(f"💾 配置文件: {CONFIG_FILE}")
         logger.info(f"🕐 時區: UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}")
         logger.info(f"🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
+        logger.info("📢 支援平台: Discord | 飛書 | 企業微信")
         logger.info("=" * 60)
     
     def _load_config(self):
@@ -696,8 +880,9 @@ class WebhookRelayManager:
         """同步保存配置到 JSON 文件"""
         try:
             config = {
-                "version": "4.1",
+                "version": "4.2",
                 "updated_at": get_local_time_str(),
+                "supported_types": WebhookItem.SUPPORTED_TYPES,
                 "groups": {}
             }
             
@@ -768,6 +953,7 @@ class WebhookRelayManager:
             "config_file": CONFIG_FILE,
             "timezone": f"UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}",
             "current_time": get_local_time_str(),
+            "supported_types": WebhookItem.SUPPORTED_TYPES,
             "groups": [g.get_stats() for g in self.groups.values()]
         }
     
@@ -811,7 +997,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔄 Webhook 中繼站 v4.1</title>
+    <title>🔄 Webhook 中繼站 v4.2</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -841,6 +1027,10 @@ HTML_TEMPLATE = '''
             text-align: center;
             font-size: 0.75em;
             color: #666;
+            margin-bottom: 15px;
+        }
+        .platform-badges {
+            text-align: center;
             margin-bottom: 15px;
         }
         
@@ -1018,6 +1208,7 @@ HTML_TEMPLATE = '''
         .btn-danger { background: linear-gradient(135deg, #ff4757, #ff2f2f); }
         .btn-success { background: linear-gradient(135deg, #00ff88, #00cc66); }
         .btn-purple { background: linear-gradient(135deg, #a855f7, #7c3aed); }
+        .btn-wecom { background: linear-gradient(135deg, #07c160, #05a14a); }
         .btn-sm { padding: 4px 8px; font-size: 0.75em; }
         
         input[type="text"], select {
@@ -1057,6 +1248,7 @@ HTML_TEMPLATE = '''
         .badge { display: inline-block; padding: 2px 6px; border-radius: 6px; font-size: 0.65em; font-weight: bold; }
         .badge-discord { background: #5865F2; color: #fff; }
         .badge-feishu { background: #3b82f6; color: #fff; }
+        .badge-wecom { background: #07c160; color: #fff; }
         .badge-next { background: #00ff88; color: #000; }
         .badge-img { background: #ff88ff; color: #000; }
         .badge-sync { background: #00d4ff; color: #000; }
@@ -1097,8 +1289,13 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <div class="container">
-        <h1>🔄 Webhook 中繼站 v4.1</h1>
-        <p class="subtitle">持久化存儲版 | 運行: <span id="uptime">-</span></p>
+        <h1>🔄 Webhook 中繼站 v4.2</h1>
+        <p class="subtitle">企業微信支援版 | 運行: <span id="uptime">-</span></p>
+        <div class="platform-badges">
+            <span class="badge badge-discord">🔵 Discord</span>
+            <span class="badge badge-feishu">📱 飛書</span>
+            <span class="badge badge-wecom">💚 企業微信</span>
+        </div>
         <p class="config-info">💾 配置: <span id="configFile">-</span> | 🕐 時區: <span id="timezone">-</span> | 當前: <span id="currentTime">-</span></p>
         
         <div class="card">
@@ -1144,11 +1341,17 @@ HTML_TEMPLATE = '''
         <div class="card">
             <h2>📖 使用說明</h2>
             <div style="font-size: 0.85em; line-height: 1.8;">
-                <p><strong>💾 持久化存儲：</strong></p>
+                <p><strong>📢 支援的平台：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
-                    <li>所有配置自動保存到 JSON 文件</li>
-                    <li>重啟後自動恢復所有 Webhook 設定</li>
-                    <li>也可在代碼中硬編碼預設配置</li>
+                    <li><span class="badge badge-discord">Discord</span> Discord Webhook</li>
+                    <li><span class="badge badge-feishu">飛書</span> 飛書自定義機器人</li>
+                    <li><span class="badge badge-wecom">企業微信</span> 企業微信群機器人 <strong style="color: #07c160;">(新增!)</strong></li>
+                </ul>
+                <p><strong>💚 企業微信設置：</strong></p>
+                <ul style="margin-left: 20px; margin-bottom: 10px;">
+                    <li>在企業微信群組中添加機器人</li>
+                    <li>獲取 Webhook URL (格式: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx)</li>
+                    <li>添加時選擇「企業微信」類型</li>
                 </ul>
                 <p><strong>📡 發送模式：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
@@ -1233,9 +1436,10 @@ HTML_TEMPLATE = '''
                             <div class="title">➕ 添加新 Webhook</div>
                             <div class="flex-row">
                                 <input type="text" id="webhook-name-${g.group_id}" placeholder="名稱 (可選)" style="max-width: 120px;">
-                                <select id="webhook-type-${g.group_id}" style="max-width: 100px;">
-                                    <option value="discord">Discord</option>
-                                    <option value="feishu">飛書</option>
+                                <select id="webhook-type-${g.group_id}" style="max-width: 110px;">
+                                    <option value="discord">🔵 Discord</option>
+                                    <option value="feishu">📱 飛書</option>
+                                    <option value="wecom">💚 企業微信</option>
                                 </select>
                                 <input type="text" id="webhook-url-${g.group_id}" placeholder="Webhook URL">
                                 <button class="btn btn-success btn-sm" onclick="addWebhook('${g.group_id}')">➕</button>
@@ -1246,7 +1450,9 @@ HTML_TEMPLATE = '''
                             <div class="webhook-item ${!w.enabled ? 'disabled' : ''} ${g.send_mode === 'round_robin' && w.enabled && isNextWebhook(g, w.id) ? 'next' : ''}">
                                 <div class="webhook-header">
                                     <div class="webhook-name">
-                                        <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : 'badge-feishu'}">${w.webhook_type === 'discord' ? '🔵 Discord' : '📱 飛書'}</span>
+                                        <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : w.webhook_type === 'feishu' ? 'badge-feishu' : 'badge-wecom'}">
+                                            ${w.webhook_type === 'discord' ? '🔵 Discord' : w.webhook_type === 'feishu' ? '📱 飛書' : '💚 企微'}
+                                        </span>
                                         <span>${w.name}</span>
                                         ${g.send_mode === 'round_robin' && w.enabled && isNextWebhook(g, w.id) ? '<span class="badge badge-next">下一個</span>' : ''}
                                     </div>
@@ -1476,7 +1682,13 @@ def receive_webhook(group_id):
         logger.info(f"[{group_id}] 📥 {content[:50]}...")
         success, message, details = group.relay_message(content, image_data, source_ip)
         
-        return jsonify({"success": success, "message": message, "group_id": group_id, "mode": group.send_mode, "details": details})
+        return jsonify({
+            "success": success, 
+            "message": message, 
+            "group_id": group_id, 
+            "mode": group.send_mode, 
+            "details": details
+        })
     except Exception as e:
         logger.error(f"❌ [{group_id}] {e}")
         return jsonify({"success": False, "message": str(e)}), 500
@@ -1531,7 +1743,11 @@ def add_webhook_to_group(group_id):
     if not group:
         return jsonify({"success": False, "message": "群組不存在"})
     data = request.get_json()
-    success, message = group.add_webhook(data.get('url', '').strip(), data.get('name'), data.get('webhook_type', 'discord'))
+    success, message = group.add_webhook(
+        data.get('url', '').strip(), 
+        data.get('name'), 
+        data.get('webhook_type', 'discord')
+    )
     return jsonify({"success": success, "message": message})
 
 
@@ -1580,10 +1796,15 @@ def test_single_webhook(group_id, webhook_id):
     data = request.get_json()
     content = data.get('content', f'[測試] {webhook.name}')
     
+    # 根據類型發送測試消息
     if webhook.webhook_type == 'discord':
         success = MessageSender.send_to_discord(webhook.url, content)
-    else:
+    elif webhook.webhook_type == 'feishu':
         success = MessageSender.send_to_feishu(webhook.url, content)
+    elif webhook.webhook_type == 'wecom':
+        success = MessageSender.send_to_wecom(webhook.url, content)
+    else:
+        success = False
     
     if success:
         webhook.stats["sent"] += 1
@@ -1603,7 +1824,13 @@ def force_save():
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "ok", "version": "4.1", "groups": len(manager.groups), "config_file": CONFIG_FILE})
+    return jsonify({
+        "status": "ok", 
+        "version": "4.2", 
+        "groups": len(manager.groups), 
+        "config_file": CONFIG_FILE,
+        "supported_types": WebhookItem.SUPPORTED_TYPES
+    })
 
 
 # ================================================================================
@@ -1612,7 +1839,7 @@ def health():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("  🔄 Webhook 中繼站 v4.1 - 持久化存儲版")
+    print("  🔄 Webhook 中繼站 v4.2 - 企業微信支援版")
     print("=" * 60)
     print(f"  📡 本地訪問: http://localhost:{PORT}")
     print(f"  💾 配置文件: {CONFIG_FILE}")
@@ -1620,14 +1847,21 @@ if __name__ == '__main__':
     print(f"  🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
     print("=" * 60)
     print()
-    print("  🆕 新功能:")
-    print("    - 自動保存配置到 JSON 文件")
-    print("    - 重啟後自動恢復所有設定")
-    print("    - 支援硬編碼預設 Webhook")
-    print("    - 程式結束時自動保存")
+    print("  📢 支援平台:")
+    print("    🔵 Discord   - Discord Webhook")
+    print("    📱 飛書      - 飛書自定義機器人")
+    print("    💚 企業微信  - 企業微信群機器人 (新增!)")
     print()
-    print("  📝 硬編碼配置方式:")
-    print("    編輯 PRESET_WEBHOOKS 字典即可")
+    print("  💚 企業微信 Webhook 格式:")
+    print("    https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx")
+    print()
+    print("  📝 在 PRESET_WEBHOOKS 中添加企業微信範例:")
+    print('    {')
+    print('        "name": "我的企業微信",')
+    print('        "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx",')
+    print('        "type": "wecom",')
+    print('        "enabled": True')
+    print('    }')
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
