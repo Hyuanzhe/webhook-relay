@@ -1583,373 +1583,429 @@ HTML_TEMPLATE = '''
     <div class="save-indicator" id="saveIndicator">💾 已自動保存</div>
     
     <script>
-        const baseUrl = window.location.origin;
-        let openGroups = new Set();
-        
-        function showSaveIndicator() {
-            const el = document.getElementById('saveIndicator');
-            el.style.display = 'block';
-            setTimeout(() => { el.style.display = 'none'; }, 2000);
-        }
-        
-        async function loadData() {
-            try {
-                const res = await fetch('/api/stats');
-                const data = await res.json();
-                
-                document.getElementById('uptime').textContent = data.uptime;
-                document.getElementById('totalGroups').textContent = data.total_groups;
-                document.getElementById('totalReceived').textContent = data.total_received;
-                document.getElementById('totalSent').textContent = data.total_sent;
-                document.getElementById('totalFailed').textContent = data.total_failed;
-                document.getElementById('successRate').textContent = data.success_rate;
-                document.getElementById('configFile').textContent = data.config_file || '-';
-                document.getElementById('timezone').textContent = data.timezone || '-';
-                document.getElementById('currentTime').textContent = data.current_time || '-';
-                
-                renderGroups(data.groups);
-            } catch (e) { console.error(e); }
-        }
-        
-        function renderGroups(groups) {
-            const container = document.getElementById('groupList');
-            if (!groups || groups.length === 0) {
-                container.innerHTML = '<div class="no-data">尚未建立任何群組</div>';
-                return;
+    const baseUrl = window.location.origin;
+    let openGroups = new Set();
+    
+    // ⭐ 新增：儲存所有輸入狀態
+    let inputStates = {};
+    let scheduleBoxStates = {}; // 保存 schedule box 的展開狀態
+    
+    function saveInputStates() {
+        // 1. 保存所有文本輸入框、下拉選單、checkbox
+        document.querySelectorAll('input[type="text"], input[type="time"], input[type="checkbox"], select').forEach(input => {
+            if (input.type === 'checkbox') {
+                inputStates[input.id] = input.checked;
+            } else {
+                inputStates[input.id] = input.value;
             }
+        });
+        
+        // 2. 保存所有 schedule box 的展開狀態
+        document.querySelectorAll('[id^="schedule-box-"]').forEach(box => {
+            scheduleBoxStates[box.id] = box.style.display !== 'none';
+        });
+    }
+    
+    function restoreInputStates() {
+        // 1. 恢復所有輸入框的值
+        Object.keys(inputStates).forEach(id => {
+            const input = document.getElementById(id);
+            if (input) {
+                if (input.type === 'checkbox') {
+                    input.checked = inputStates[id];
+                } else {
+                    input.value = inputStates[id];
+                }
+            }
+        });
+        
+        // 2. 恢復所有 schedule box 的展開狀態
+        Object.keys(scheduleBoxStates).forEach(id => {
+            const box = document.getElementById(id);
+            if (box && scheduleBoxStates[id]) {
+                box.style.display = 'block';
+            }
+        });
+    }
+    
+    function showSaveIndicator() {
+        const el = document.getElementById('saveIndicator');
+        el.style.display = 'block';
+        setTimeout(() => { el.style.display = 'none'; }, 2000);
+    }
+    
+    async function loadData() {
+        try {
+            // ⭐ 刷新前保存所有狀態
+            saveInputStates();
             
-            container.innerHTML = groups.map(g => `
-                <div class="group-card">
-                    <div class="group-header" onclick="toggleGroup('${g.group_id}')">
-                        <div class="group-title">
-                            <span>${g.display_name}</span>
-                            <span class="id">${g.group_id}</span>
-                            <span class="badge ${g.send_mode === 'sync' ? 'badge-sync' : 'badge-rr'}">${g.send_mode_name}</span>
-                            ${g.webhooks_fixed > 0 ? '<span class="badge badge-fixed">📌' + g.webhooks_fixed + '</span>' : ''}
-                        </div>
-                        <div class="group-stats-mini">
-                            <span>📥${g.received}</span>
-                            <span>✅${g.total_sent}</span>
-                            <span>❌${g.total_failed}</span>
-                            <span>🔗${g.webhooks_enabled}/${g.webhooks_total}</span>
-                        </div>
+            const res = await fetch('/api/stats');
+            const data = await res.json();
+            
+            document.getElementById('uptime').textContent = data.uptime;
+            document.getElementById('totalGroups').textContent = data.total_groups;
+            document.getElementById('totalReceived').textContent = data.total_received;
+            document.getElementById('totalSent').textContent = data.total_sent;
+            document.getElementById('totalFailed').textContent = data.total_failed;
+            document.getElementById('successRate').textContent = data.success_rate;
+            document.getElementById('configFile').textContent = data.config_file || '-';
+            document.getElementById('timezone').textContent = data.timezone || '-';
+            document.getElementById('currentTime').textContent = data.current_time || '-';
+            
+            renderGroups(data.groups);
+            
+            // ⭐ 渲染後恢復所有狀態
+            restoreInputStates();
+        } catch (e) { console.error(e); }
+    }
+    
+    function renderGroups(groups) {
+        const container = document.getElementById('groupList');
+        if (!groups || groups.length === 0) {
+            container.innerHTML = '<div class="no-data">尚未建立任何群組</div>';
+            return;
+        }
+        
+        container.innerHTML = groups.map(g => `
+            <div class="group-card">
+                <div class="group-header" onclick="toggleGroup('${g.group_id}')">
+                    <div class="group-title">
+                        <span>${g.display_name}</span>
+                        <span class="id">${g.group_id}</span>
+                        <span class="badge ${g.send_mode === 'sync' ? 'badge-sync' : 'badge-rr'}">${g.send_mode_name}</span>
+                        ${g.webhooks_fixed > 0 ? '<span class="badge badge-fixed">📌' + g.webhooks_fixed + '</span>' : ''}
                     </div>
-                    <div class="group-body ${openGroups.has(g.group_id) ? 'open' : ''}" id="group-${g.group_id}">
-                        <div class="section-title">📡 接收端點</div>
-                        <div class="endpoint-box">
-                            <span>${baseUrl}/webhook/${g.group_id}</span>
-                            <button class="copy-btn" onclick="copyText('${baseUrl}/webhook/${g.group_id}')">📋 複製</button>
-                        </div>
-                        
-                        <div class="section-title">⚙️ 發送模式</div>
-                        <div class="mode-selector">
-                            <button class="mode-btn ${g.send_mode === 'sync' ? 'active' : ''}" onclick="setMode('${g.group_id}', 'sync')">🔄 同步模式</button>
-                            <button class="mode-btn ${g.send_mode === 'round_robin' ? 'active-rr' : ''}" onclick="setMode('${g.group_id}', 'round_robin')">🎯 輪詢模式</button>
-                        </div>
-                        <div class="mode-info ${g.send_mode}">
-                            ${g.send_mode === 'sync' ? '💡 同步模式：每次通知會同時發送到所有<strong>啟用且在時段內</strong>的 Webhook（固定的也會發送）' : '💡 輪詢模式：每次通知會輪流發送到下一個<strong>啟用且在時段內</strong>的 Webhook（固定的也會發送）'}
-                        </div>
-                        
-                        <div class="section-title">🔗 Webhook 列表 (${g.webhooks_enabled}/${g.webhooks_total} 啟用, ${g.webhooks_fixed} 固定)</div>
-                        <div class="add-webhook-form">
-                            <div class="title">➕ 添加新 Webhook</div>
-                            <div class="flex-row">
-                                <input type="text" id="webhook-name-${g.group_id}" placeholder="名稱 (可選)" style="max-width: 120px;">
-                                <select id="webhook-type-${g.group_id}" style="max-width: 100px;">
-                                    <option value="discord">Discord</option>
-                                    <option value="feishu">飛書</option>
-                                    <option value="wecom">企業微信</option>
-                                </select>
-                                <input type="text" id="webhook-url-${g.group_id}" placeholder="Webhook URL">
-                                <label style="display: flex; align-items: center; gap: 4px; font-size: 0.85em;">
-                                    <input type="checkbox" id="webhook-fixed-${g.group_id}">
-                                    <span>📌 固定</span>
-                                </label>
-                                <button class="btn btn-success btn-sm" onclick="addWebhook('${g.group_id}')">➕</button>
-                            </div>
-                        </div>
-                        
-                        ${g.webhooks && g.webhooks.length ? g.webhooks.map((w, i) => {
-                            const isNext = g.send_mode === 'round_robin' && w.enabled && !w.is_fixed && isNextWebhook(g, w.id);
-                            const scheduleClass = w.schedule_enabled && !w.is_in_schedule ? 'schedule-inactive' : '';
-                            return `
-                            <div class="webhook-item ${!w.enabled ? 'disabled' : ''} ${isNext ? 'next' : ''} ${w.is_fixed ? 'fixed' : ''} ${scheduleClass}">
-                                <div class="webhook-header">
-                                    <div class="webhook-name">
-                                        <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : w.webhook_type === 'feishu' ? 'badge-feishu' : 'badge-wecom'}">
-                                            ${w.webhook_type === 'discord' ? '🔵 Discord' : w.webhook_type === 'feishu' ? '📱 飛書' : '💬 企業微信'}
-                                        </span>
-                                        <span>${w.name}</span>
-                                        ${w.is_fixed ? '<span class="badge badge-fixed">📌 固定</span>' : ''}
-                                        ${isNext ? '<span class="badge badge-next">下一個</span>' : ''}
-                                        ${w.schedule_enabled ? '<span class="badge badge-schedule">⏰ ' + w.schedule_start + '-' + w.schedule_end + '</span>' : ''}
-                                    </div>
-                                    <div class="webhook-controls">
-                                        <label class="toggle-switch">
-                                            <input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="toggleWebhook('${g.group_id}', '${w.id}', this.checked)">
-                                            <span class="toggle-slider"></span>
-                                        </label>
-                                        <button class="btn ${w.is_fixed ? 'btn-pink' : 'btn-purple'} btn-sm" 
-                                                onclick="toggleFixed('${g.group_id}', '${w.id}', ${!w.is_fixed})" 
-                                                title="${w.is_fixed ? '取消固定' : '設為固定'}">
-                                            ${w.is_fixed ? '📌' : '📍'}
-                                        </button>
-                                        <button class="btn btn-yellow btn-sm" 
-                                                onclick="toggleScheduleUI('${g.group_id}', '${w.id}')" 
-                                                title="設定時段">
-                                            ⏰
-                                        </button>
-                                        <button class="btn btn-purple btn-sm" onclick="renameWebhook('${g.group_id}', '${w.id}', '${w.name}')">✏️</button>
-                                        <button class="btn btn-sm" onclick="testWebhook('${g.group_id}', '${w.id}')">🧪</button>
-                                        <button class="btn btn-danger btn-sm" onclick="removeWebhook('${g.group_id}', '${w.id}')">🗑️</button>
-                                    </div>
-                                </div>
-                                <div class="webhook-url">${w.url_preview}</div>
-                                <div class="webhook-stats">✅ ${w.sent} | ❌ ${w.failed} | 📅 ${w.created_at}</div>
-                                
-                                <div class="webhook-schedule-box ${w.schedule_enabled ? 'active' : ''}" id="schedule-box-${w.id}" style="display: none;">
-                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;">
-                                        <label class="toggle-switch">
-                                            <input type="checkbox" id="schedule-enabled-${w.id}" ${w.schedule_enabled ? 'checked' : ''}>
-                                            <span class="toggle-slider"></span>
-                                        </label>
-                                        <span style="font-size: 0.9em;">啟用時段控制</span>
-                                    </div>
-                                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                        <span style="font-size: 0.85em; opacity: 0.8;">從</span>
-                                        <input type="time" id="schedule-start-${w.id}" value="${w.schedule_start}" style="max-width: 100px; padding: 4px;">
-                                        <span style="font-size: 0.85em; opacity: 0.8;">到</span>
-                                        <input type="time" id="schedule-end-${w.id}" value="${w.schedule_end}" style="max-width: 100px; padding: 4px;">
-                                        <button class="btn btn-success btn-sm" onclick="saveWebhookSchedule('${g.group_id}', '${w.id}')">💾 保存</button>
-                                    </div>
-                                    ${w.schedule_enabled ? `
-                                        <div style="margin-top: 6px; font-size: 0.85em; opacity: 0.8;">
-                                            ${w.is_in_schedule ? '✅ 目前在通知時段內' : '⏰ 目前不在通知時段內'}
-                                        </div>
-                                    ` : ''}
-                                </div>
-                            </div>
-                        `}).join('') : '<div class="no-data">尚未添加任何 Webhook</div>'}
-                        
-                        <div class="section-title">📜 最近發送記錄</div>
-                        ${g.history && g.history.length ? g.history.slice(0, 8).map(h => `
-                            <div class="history-item">
-                                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px;">
-                                    <span><span class="time">${h.time}</span> <span class="mode-tag">${h.mode}</span> ${h.has_image ? '<span class="badge badge-img">📷</span>' : ''}</span>
-                                    <span>${h.status}</span>
-                                </div>
-                                <div style="opacity: 0.6; margin-top: 4px;">${h.content}</div>
-                            </div>
-                        `).join('') : '<div class="no-data">暫無記錄</div>'}
-                        
-                        <div style="margin-top: 15px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
-                            <button class="btn btn-purple btn-sm" onclick="testGroup('${g.group_id}')">🧪 測試群組</button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteGroup('${g.group_id}')">🗑️ 刪除群組</button>
-                        </div>
+                    <div class="group-stats-mini">
+                        <span>📥${g.received}</span>
+                        <span>✅${g.total_sent}</span>
+                        <span>❌${g.total_failed}</span>
+                        <span>🔗${g.webhooks_enabled}/${g.webhooks_total}</span>
                     </div>
                 </div>
-            `).join('');
+                <div class="group-body ${openGroups.has(g.group_id) ? 'open' : ''}" id="group-${g.group_id}">
+                    <div class="section-title">📡 接收端點</div>
+                    <div class="endpoint-box">
+                        <span>${baseUrl}/webhook/${g.group_id}</span>
+                        <button class="copy-btn" onclick="copyText('${baseUrl}/webhook/${g.group_id}')">📋 複製</button>
+                    </div>
+                    
+                    <div class="section-title">⚙️ 發送模式</div>
+                    <div class="mode-selector">
+                        <button class="mode-btn ${g.send_mode === 'sync' ? 'active' : ''}" onclick="setMode('${g.group_id}', 'sync')">🔄 同步模式</button>
+                        <button class="mode-btn ${g.send_mode === 'round_robin' ? 'active-rr' : ''}" onclick="setMode('${g.group_id}', 'round_robin')">🎯 輪詢模式</button>
+                    </div>
+                    <div class="mode-info ${g.send_mode}">
+                        ${g.send_mode === 'sync' ? '💡 同步模式：每次通知會同時發送到所有<strong>啟用且在時段內</strong>的 Webhook（固定的也會發送）' : '💡 輪詢模式：每次通知會輪流發送到下一個<strong>啟用且在時段內</strong>的 Webhook（固定的也會發送）'}
+                    </div>
+                    
+                    <div class="section-title">🔗 Webhook 列表 (${g.webhooks_enabled}/${g.webhooks_total} 啟用, ${g.webhooks_fixed} 固定)</div>
+                    <div class="add-webhook-form">
+                        <div class="title">➕ 添加新 Webhook</div>
+                        <div class="flex-row">
+                            <input type="text" id="webhook-name-${g.group_id}" placeholder="名稱 (可選)" style="max-width: 120px;">
+                            <select id="webhook-type-${g.group_id}" style="max-width: 100px;">
+                                <option value="discord">Discord</option>
+                                <option value="feishu">飛書</option>
+                                <option value="wecom">企業微信</option>
+                            </select>
+                            <input type="text" id="webhook-url-${g.group_id}" placeholder="Webhook URL">
+                            <label style="display: flex; align-items: center; gap: 4px; font-size: 0.85em;">
+                                <input type="checkbox" id="webhook-fixed-${g.group_id}">
+                                <span>📌 固定</span>
+                            </label>
+                            <button class="btn btn-success btn-sm" onclick="addWebhook('${g.group_id}')">➕</button>
+                        </div>
+                    </div>
+                    
+                    ${g.webhooks && g.webhooks.length ? g.webhooks.map((w, i) => {
+                        const isNext = g.send_mode === 'round_robin' && w.enabled && !w.is_fixed && isNextWebhook(g, w.id);
+                        const scheduleClass = w.schedule_enabled && !w.is_in_schedule ? 'schedule-inactive' : '';
+                        return `
+                        <div class="webhook-item ${!w.enabled ? 'disabled' : ''} ${isNext ? 'next' : ''} ${w.is_fixed ? 'fixed' : ''} ${scheduleClass}">
+                            <div class="webhook-header">
+                                <div class="webhook-name">
+                                    <span class="badge ${w.webhook_type === 'discord' ? 'badge-discord' : w.webhook_type === 'feishu' ? 'badge-feishu' : 'badge-wecom'}">
+                                        ${w.webhook_type === 'discord' ? '🔵 Discord' : w.webhook_type === 'feishu' ? '📱 飛書' : '💬 企業微信'}
+                                    </span>
+                                    <span>${w.name}</span>
+                                    ${w.is_fixed ? '<span class="badge badge-fixed">📌 固定</span>' : ''}
+                                    ${isNext ? '<span class="badge badge-next">下一個</span>' : ''}
+                                    ${w.schedule_enabled ? '<span class="badge badge-schedule">⏰ ' + w.schedule_start + '-' + w.schedule_end + '</span>' : ''}
+                                </div>
+                                <div class="webhook-controls">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="toggleWebhook('${g.group_id}', '${w.id}', this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <button class="btn ${w.is_fixed ? 'btn-pink' : 'btn-purple'} btn-sm" 
+                                            onclick="toggleFixed('${g.group_id}', '${w.id}', ${!w.is_fixed})" 
+                                            title="${w.is_fixed ? '取消固定' : '設為固定'}">
+                                        ${w.is_fixed ? '📌' : '📍'}
+                                    </button>
+                                    <button class="btn btn-yellow btn-sm" 
+                                            onclick="toggleScheduleUI('${g.group_id}', '${w.id}')" 
+                                            title="設定時段">
+                                        ⏰
+                                    </button>
+                                    <button class="btn btn-purple btn-sm" onclick="renameWebhook('${g.group_id}', '${w.id}', '${w.name}')">✏️</button>
+                                    <button class="btn btn-sm" onclick="testWebhook('${g.group_id}', '${w.id}')">🧪</button>
+                                    <button class="btn btn-danger btn-sm" onclick="removeWebhook('${g.group_id}', '${w.id}')">🗑️</button>
+                                </div>
+                            </div>
+                            <div class="webhook-url">${w.url_preview}</div>
+                            <div class="webhook-stats">✅ ${w.sent} | ❌ ${w.failed} | 📅 ${w.created_at}</div>
+                            
+                            <div class="webhook-schedule-box ${w.schedule_enabled ? 'active' : ''}" id="schedule-box-${w.id}" style="display: none;">
+                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="schedule-enabled-${w.id}" ${w.schedule_enabled ? 'checked' : ''}>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <span style="font-size: 0.9em;">啟用時段控制</span>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <span style="font-size: 0.85em; opacity: 0.8;">從</span>
+                                    <input type="time" id="schedule-start-${w.id}" value="${w.schedule_start}" style="max-width: 100px; padding: 4px;">
+                                    <span style="font-size: 0.85em; opacity: 0.8;">到</span>
+                                    <input type="time" id="schedule-end-${w.id}" value="${w.schedule_end}" style="max-width: 100px; padding: 4px;">
+                                    <button class="btn btn-success btn-sm" onclick="saveWebhookSchedule('${g.group_id}', '${w.id}')">💾 保存</button>
+                                </div>
+                                ${w.schedule_enabled ? `
+                                    <div style="margin-top: 6px; font-size: 0.85em; opacity: 0.8;">
+                                        ${w.is_in_schedule ? '✅ 目前在通知時段內' : '⏰ 目前不在通知時段內'}
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `}).join('') : '<div class="no-data">尚未添加任何 Webhook</div>'}
+                    
+                    <div class="section-title">📜 最近發送記錄</div>
+                    ${g.history && g.history.length ? g.history.slice(0, 8).map(h => `
+                        <div class="history-item">
+                            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px;">
+                                <span><span class="time">${h.time}</span> <span class="mode-tag">${h.mode}</span> ${h.has_image ? '<span class="badge badge-img">📷</span>' : ''}</span>
+                                <span>${h.status}</span>
+                            </div>
+                            <div style="opacity: 0.6; margin-top: 4px;">${h.content}</div>
+                        </div>
+                    `).join('') : '<div class="no-data">暫無記錄</div>'}
+                    
+                    <div style="margin-top: 15px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
+                        <button class="btn btn-purple btn-sm" onclick="testGroup('${g.group_id}')">🧪 測試群組</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteGroup('${g.group_id}')">🗑️ 刪除群組</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+    
+    function isNextWebhook(group, webhookId) {
+        const enabled = group.webhooks.filter(w => w.enabled && !w.is_fixed);
+        if (enabled.length === 0) return false;
+        const idx = group.current_index % enabled.length;
+        return enabled[idx] && enabled[idx].id === webhookId;
+    }
+    
+    function toggleGroup(groupId) {
+        if (openGroups.has(groupId)) openGroups.delete(groupId);
+        else openGroups.add(groupId);
+        document.getElementById(\`group-\${groupId}\`)?.classList.toggle('open');
+    }
+    
+    function toggleScheduleUI(groupId, webhookId) {
+        const box = document.getElementById(\`schedule-box-\${webhookId}\`);
+        if (box.style.display === 'none') {
+            box.style.display = 'block';
+        } else {
+            box.style.display = 'none';
+        }
+    }
+    
+    async function saveWebhookSchedule(groupId, webhookId) {
+        const enabled = document.getElementById(\`schedule-enabled-\${webhookId}\`).checked;
+        const startTime = document.getElementById(\`schedule-start-\${webhookId}\`).value;
+        const endTime = document.getElementById(\`schedule-end-\${webhookId}\`).value;
+        
+        if (enabled && (!startTime || !endTime)) {
+            return alert('請選擇開始和結束時間');
         }
         
-        function isNextWebhook(group, webhookId) {
-            const enabled = group.webhooks.filter(w => w.enabled && !w.is_fixed);
-            if (enabled.length === 0) return false;
-            const idx = group.current_index % enabled.length;
-            return enabled[idx] && enabled[idx].id === webhookId;
-        }
+        const res = await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/schedule\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                enabled,
+                start_time: startTime,
+                end_time: endTime
+            })
+        });
+        const result = await res.json();
         
-        function toggleGroup(groupId) {
-            if (openGroups.has(groupId)) openGroups.delete(groupId);
-            else openGroups.add(groupId);
-            document.getElementById(`group-${groupId}`)?.classList.toggle('open');
-        }
-        
-        function toggleScheduleUI(groupId, webhookId) {
-            const box = document.getElementById(`schedule-box-${webhookId}`);
-            if (box.style.display === 'none') {
-                box.style.display = 'block';
-            } else {
-                box.style.display = 'none';
-            }
-        }
-        
-        async function saveWebhookSchedule(groupId, webhookId) {
-            const enabled = document.getElementById(`schedule-enabled-${webhookId}`).checked;
-            const startTime = document.getElementById(`schedule-start-${webhookId}`).value;
-            const endTime = document.getElementById(`schedule-end-${webhookId}`).value;
-            
-            if (enabled && (!startTime || !endTime)) {
-                return alert('請選擇開始和結束時間');
-            }
-            
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/schedule`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ 
-                    enabled,
-                    start_time: startTime,
-                    end_time: endTime
-                })
-            });
-            const result = await res.json();
-            
-            if (result.success) {
-                showSaveIndicator();
-                await loadData();
-                alert('✅ ' + result.message);
-            } else {
-                alert('❌ ' + result.message);
-            }
-        }
-        
-        function copyText(text) {
-            navigator.clipboard.writeText(text);
-            alert('✅ 已複製！');
-        }
-        
-        async function createGroup() {
-            const groupId = document.getElementById('newGroupId').value.trim();
-            const displayName = document.getElementById('newGroupName').value.trim();
-            if (!groupId) return alert('請輸入群組 ID');
-            
-            const res = await fetch('/api/group', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ group_id: groupId, display_name: displayName || null })
-            });
-            const result = await res.json();
-            
-            if (result.success) {
-                document.getElementById('newGroupId').value = '';
-                document.getElementById('newGroupName').value = '';
-                openGroups.add(groupId.toLowerCase());
-                showSaveIndicator();
-                await loadData();
-            } else alert('❌ ' + result.message);
-        }
-        
-        async function deleteGroup(groupId) {
-            if (!confirm(`確定刪除群組 [${groupId}]？`)) return;
-            await fetch(`/api/group/${groupId}`, { method: 'DELETE' });
-            openGroups.delete(groupId);
+        if (result.success) {
             showSaveIndicator();
             await loadData();
+            alert('✅ ' + result.message);
+        } else {
+            alert('❌ ' + result.message);
         }
+    }
+    
+    function copyText(text) {
+        navigator.clipboard.writeText(text);
+        alert('✅ 已複製！');
+    }
+    
+    async function createGroup() {
+        const groupId = document.getElementById('newGroupId').value.trim();
+        const displayName = document.getElementById('newGroupName').value.trim();
+        if (!groupId) return alert('請輸入群組 ID');
         
-        async function setMode(groupId, mode) {
-            const res = await fetch(`/api/group/${groupId}/mode`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ mode })
-            });
-            const result = await res.json();
-            if (result.success) { 
-                showSaveIndicator(); 
-                await loadData(); 
-            } else alert('❌ ' + result.message);
-        }
+        const res = await fetch('/api/group', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ group_id: groupId, display_name: displayName || null })
+        });
+        const result = await res.json();
         
-        async function addWebhook(groupId) {
-            const nameInput = document.getElementById(`webhook-name-${groupId}`);
-            const typeSelect = document.getElementById(`webhook-type-${groupId}`);
-            const urlInput = document.getElementById(`webhook-url-${groupId}`);
-            const fixedCheckbox = document.getElementById(`webhook-fixed-${groupId}`);
-            
-            const name = nameInput.value.trim();
-            const type = typeSelect.value;
-            const url = urlInput.value.trim();
-            const isFixed = fixedCheckbox.checked;
-            
-            if (!url) return alert('請輸入 Webhook URL');
-            
-            const res = await fetch(`/api/group/${groupId}/webhook`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ url, name: name || null, webhook_type: type, is_fixed: isFixed })
-            });
-            const result = await res.json();
-            
-            if (result.success) {
-                nameInput.value = '';
-                urlInput.value = '';
-                typeSelect.value = 'discord';
-                fixedCheckbox.checked = false;
-                showSaveIndicator();
-                await loadData();
-            } else {
-                alert('❌ ' + result.message);
-            }
-        }
-        
-        async function removeWebhook(groupId, webhookId) {
-            if (!confirm('確定移除？')) return;
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}`, { method: 'DELETE' });
+        if (result.success) {
+            document.getElementById('newGroupId').value = '';
+            document.getElementById('newGroupName').value = '';
+            openGroups.add(groupId.toLowerCase());
             showSaveIndicator();
             await loadData();
-        }
+        } else alert('❌ ' + result.message);
+    }
+    
+    async function deleteGroup(groupId) {
+        if (!confirm(\`確定刪除群組 [\${groupId}]？\`)) return;
+        await fetch(\`/api/group/\${groupId}\`, { method: 'DELETE' });
+        openGroups.delete(groupId);
+        showSaveIndicator();
+        await loadData();
+    }
+    
+    async function setMode(groupId, mode) {
+        const res = await fetch(\`/api/group/\${groupId}/mode\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ mode })
+        });
+        const result = await res.json();
+        if (result.success) { 
+            showSaveIndicator(); 
+            await loadData(); 
+        } else alert('❌ ' + result.message);
+    }
+    
+    async function addWebhook(groupId) {
+        const nameInput = document.getElementById(\`webhook-name-\${groupId}\`);
+        const typeSelect = document.getElementById(\`webhook-type-\${groupId}\`);
+        const urlInput = document.getElementById(\`webhook-url-\${groupId}\`);
+        const fixedCheckbox = document.getElementById(\`webhook-fixed-\${groupId}\`);
         
-        async function toggleWebhook(groupId, webhookId, enabled) {
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}/toggle`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ enabled })
-            });
+        const name = nameInput.value.trim();
+        const type = typeSelect.value;
+        const url = urlInput.value.trim();
+        const isFixed = fixedCheckbox.checked;
+        
+        if (!url) return alert('請輸入 Webhook URL');
+        
+        const res = await fetch(\`/api/group/\${groupId}/webhook\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ url, name: name || null, webhook_type: type, is_fixed: isFixed })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+            // ⭐ 成功後立即清空輸入框
+            nameInput.value = '';
+            urlInput.value = '';
+            typeSelect.value = 'discord';
+            fixedCheckbox.checked = false;
+            
+            // ⭐ 清除這些輸入框的緩存狀態
+            delete inputStates[nameInput.id];
+            delete inputStates[urlInput.id];
+            delete inputStates[typeSelect.id];
+            delete inputStates[fixedCheckbox.id];
+            
             showSaveIndicator();
             await loadData();
+        } else {
+            alert('❌ ' + result.message);
         }
-        
-        async function toggleFixed(groupId, webhookId, isFixed) {
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}/fixed`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ is_fixed: isFixed })
-            });
-            showSaveIndicator();
-            await loadData();
-        }
-        
-        async function renameWebhook(groupId, webhookId, currentName) {
-            const newName = prompt('請輸入新名稱:', currentName);
-            if (!newName || newName === currentName) return;
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}`, {
-                method: 'PATCH',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name: newName })
-            });
-            showSaveIndicator();
-            await loadData();
-        }
-        
-        async function testWebhook(groupId, webhookId) {
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/test`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ content: `[測試] ${new Date().toLocaleTimeString()}` })
-            });
-            const result = await res.json();
-            alert(result.success ? '✅ 測試成功！' : `❌ ${result.message}`);
-            await loadData();
-        }
-        
-        async function testGroup(groupId) {
-            const content = prompt('測試訊息:', `[測試] ${groupId.toUpperCase()} BOSS 通知`);
-            if (!content) return;
-            const res = await fetch(`/webhook/${groupId}`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ content })
-            });
-            const result = await res.json();
-            alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
-            await loadData();
-        }
-        
-        document.getElementById('newGroupId').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
-        document.getElementById('newGroupName').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
-        
-        loadData();
-        setInterval(loadData, 5000);
-    </script>
+    }
+    
+    async function removeWebhook(groupId, webhookId) {
+        if (!confirm('確定移除？')) return;
+        await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}\`, { method: 'DELETE' });
+        showSaveIndicator();
+        await loadData();
+    }
+    
+    async function toggleWebhook(groupId, webhookId, enabled) {
+        await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/toggle\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ enabled })
+        });
+        showSaveIndicator();
+        await loadData();
+    }
+    
+    async function toggleFixed(groupId, webhookId, isFixed) {
+        await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/fixed\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ is_fixed: isFixed })
+        });
+        showSaveIndicator();
+        await loadData();
+    }
+    
+    async function renameWebhook(groupId, webhookId, currentName) {
+        const newName = prompt('請輸入新名稱:', currentName);
+        if (!newName || newName === currentName) return;
+        await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}\`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: newName })
+        });
+        showSaveIndicator();
+        await loadData();
+    }
+    
+    async function testWebhook(groupId, webhookId) {
+        const res = await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/test\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ content: \`[測試] \${new Date().toLocaleTimeString()}\` })
+        });
+        const result = await res.json();
+        alert(result.success ? '✅ 測試成功！' : \`❌ \${result.message}\`);
+        await loadData();
+    }
+    
+    async function testGroup(groupId) {
+        const content = prompt('測試訊息:', \`[測試] \${groupId.toUpperCase()} BOSS 通知\`);
+        if (!content) return;
+        const res = await fetch(\`/webhook/\${groupId}\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ content })
+        });
+        const result = await res.json();
+        alert(result.success ? \`✅ \${result.message}\` : \`❌ \${result.message}\`);
+        await loadData();
+    }
+    
+    document.getElementById('newGroupId').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
+    document.getElementById('newGroupName').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
+    
+    loadData();
+    setInterval(loadData, 5000);
+</script>
 </body>
 </html>
 '''
