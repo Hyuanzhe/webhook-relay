@@ -489,19 +489,55 @@ class MessageSender:
     
     @staticmethod
     def send_to_wecom(webhook_url: str, content: str, image_data: bytes = None) -> bool:
-        """發送到企業微信"""
+        """發送到企業微信群機器人（支援圖片 Base64）"""
         try:
-            payload = {
-                "msgtype": "text",
-                "text": {
-                    "content": f"{content}\n⏰ {get_local_time_str()}"
+            import base64
+            
+            # 先發送文字訊息
+            text_payload = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "content": f"## 🎯 BOSS 通知\n\n{content}\n\n> ⏰ {get_local_time_str()}"
                 }
             }
-            response = requests.post(webhook_url, json=payload, timeout=10)
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('errcode') == 0
-            return False
+            
+            response = requests.post(webhook_url, json=text_payload, timeout=10)
+            result = response.json()
+            
+            if result.get('errcode') != 0:
+                logger.error(f"❌ 企業微信文字發送失敗: {result}")
+                return False
+            
+            # 如果有圖片，發送圖片
+            if image_data:
+                try:
+                    # 企業微信圖片需要 Base64 + MD5
+                    img_base64 = base64.b64encode(image_data).decode()
+                    img_md5 = hashlib.md5(image_data).hexdigest()
+                    
+                    image_payload = {
+                        "msgtype": "image",
+                        "image": {
+                            "base64": img_base64,
+                            "md5": img_md5
+                        }
+                    }
+                    
+                    img_response = requests.post(webhook_url, json=image_payload, timeout=30)
+                    img_result = img_response.json()
+                    
+                    if img_result.get('errcode') == 0:
+                        logger.info("✅ 企業微信圖片發送成功")
+                    else:
+                        logger.warning(f"⚠️ 企業微信圖片發送失敗: {img_result.get('errmsg')}")
+                        # 文字已發送成功，圖片失敗不影響整體結果
+                
+                except Exception as img_e:
+                    logger.warning(f"⚠️ 企業微信圖片發送異常: {img_e}")
+                    # 文字已發送成功，圖片失敗不影響整體結果
+            
+            return True
+            
         except Exception as e:
             logger.error(f"❌ 企業微信發送失敗: {e}")
             return False
@@ -2136,4 +2172,3 @@ if __name__ == '__main__':
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
-
