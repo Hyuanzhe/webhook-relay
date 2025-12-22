@@ -248,7 +248,7 @@ app = Flask(__name__)
 # ================================================================================
 
 class FeishuImageUploader:
-    """飛書圖片上傳器"""
+    """飛書圖片上傳器 - 增強日誌版"""
     
     def __init__(self):
         self.upload_cache = {}
@@ -259,15 +259,20 @@ class FeishuImageUploader:
         try:
             current_time = time.time()
             if self.token_cache['token'] and current_time < self.token_cache['expire_time'] - 60:
+                logger.info("🔄 使用緩存的 access_token")
                 return self.token_cache['token']
             
+            logger.info("🔑 開始獲取新的 access_token...")
             url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
             payload = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
             
             response = requests.post(url, json=payload, timeout=10)
+            logger.info(f"📥 Token 響應狀態碼: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
+                logger.info(f"📦 Token API 返回: code={result.get('code')}")
+                
                 if result.get('code') == 0:
                     token = result.get('tenant_access_token')
                     expire = result.get('expire', 7200)
@@ -275,20 +280,33 @@ class FeishuImageUploader:
                     self.token_cache['expire_time'] = current_time + expire
                     logger.info("✅ 獲取飛書 access_token 成功")
                     return token
+                else:
+                    logger.error(f"❌ 飛書 API 錯誤: code={result.get('code')}, msg={result.get('msg')}")
+            else:
+                logger.error(f"❌ HTTP 請求失敗: {response.status_code}")
+            
             return None
         except Exception as e:
-            logger.error(f"❌ 獲取 access_token 異常: {e}")
+            logger.error(f"❌ 獲取 access_token 異常: {e}", exc_info=True)
             return None
     
     def upload_image(self, image_data: bytes) -> str:
         """上傳圖片到飛書"""
         try:
+            if not image_data:
+                logger.warning("⚠️ 圖片數據為空，跳過上傳")
+                return None
+                
+            logger.info(f"📷 開始上傳圖片，大小: {len(image_data)} bytes")
+            
             img_hash = hashlib.md5(image_data).hexdigest()
             if img_hash in self.upload_cache:
+                logger.info(f"♻️ 使用緩存的圖片 key")
                 return self.upload_cache[img_hash]
             
             token = self.get_tenant_access_token()
             if not token:
+                logger.error("❌ 無法獲取 access_token，圖片上傳失敗")
                 return None
             
             url = "https://open.feishu.cn/open-apis/im/v1/images"
@@ -296,18 +314,30 @@ class FeishuImageUploader:
             files = {'image': ('screenshot.png', image_data, 'image/png')}
             data = {'image_type': 'message'}
             
+            logger.info(f"📡 開始上傳圖片到飛書...")
             response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+            logger.info(f"📥 上傳響應狀態碼: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
+                logger.info(f"📦 上傳 API 返回: code={result.get('code')}")
+                
                 if result.get('code') == 0:
                     image_key = result.get('data', {}).get('image_key')
                     if image_key:
                         self.upload_cache[img_hash] = image_key
+                        logger.info(f"✅ 圖片上傳成功! image_key: {image_key}")
                         return image_key
+                    else:
+                        logger.error("❌ 響應中沒有 image_key")
+                else:
+                    logger.error(f"❌ 飛書圖片上傳 API 錯誤: code={result.get('code')}, msg={result.get('msg')}")
+            else:
+                logger.error(f"❌ 圖片上傳 HTTP 失敗: {response.status_code}, {response.text[:200]}")
+            
             return None
         except Exception as e:
-            logger.error(f"❌ 上傳圖片異常: {e}")
+            logger.error(f"❌ 上傳圖片異常: {e}", exc_info=True)
             return None
 
 
@@ -2106,3 +2136,4 @@ if __name__ == '__main__':
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+
