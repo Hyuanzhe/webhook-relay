@@ -1586,6 +1586,48 @@ HTML_TEMPLATE = '''
         const baseUrl = window.location.origin;
         let openGroups = new Set();
         
+        // ⭐ 新增：儲存所有輸入狀態
+        let inputStates = {};
+        let scheduleBoxStates = {}; // 保存 schedule box 的展開狀態
+        
+        function saveInputStates() {
+            // 1. 保存所有文本輸入框、下拉選單、checkbox
+            document.querySelectorAll('input[type="text"], input[type="time"], input[type="checkbox"], select').forEach(input => {
+                if (input.type === 'checkbox') {
+                    inputStates[input.id] = input.checked;
+                } else {
+                    inputStates[input.id] = input.value;
+                }
+            });
+            
+            // 2. 保存所有 schedule box 的展開狀態
+            document.querySelectorAll('[id^="schedule-box-"]').forEach(box => {
+                scheduleBoxStates[box.id] = box.style.display !== 'none';
+            });
+        }
+        
+        function restoreInputStates() {
+            // 1. 恢復所有輸入框的值
+            Object.keys(inputStates).forEach(id => {
+                const input = document.getElementById(id);
+                if (input) {
+                    if (input.type === 'checkbox') {
+                        input.checked = inputStates[id];
+                    } else {
+                        input.value = inputStates[id];
+                    }
+                }
+            });
+            
+            // 2. 恢復所有 schedule box 的展開狀態
+            Object.keys(scheduleBoxStates).forEach(id => {
+                const box = document.getElementById(id);
+                if (box && scheduleBoxStates[id]) {
+                    box.style.display = 'block';
+                }
+            });
+        }
+        
         function showSaveIndicator() {
             const el = document.getElementById('saveIndicator');
             el.style.display = 'block';
@@ -1594,6 +1636,9 @@ HTML_TEMPLATE = '''
         
         async function loadData() {
             try {
+                // ⭐ 刷新前保存所有狀態
+                saveInputStates();
+                
                 const res = await fetch('/api/stats');
                 const data = await res.json();
                 
@@ -1608,6 +1653,9 @@ HTML_TEMPLATE = '''
                 document.getElementById('currentTime').textContent = data.current_time || '-';
                 
                 renderGroups(data.groups);
+                
+                // ⭐ 渲染後恢復所有狀態
+                restoreInputStates();
             } catch (e) { console.error(e); }
         }
         
@@ -1761,11 +1809,11 @@ HTML_TEMPLATE = '''
         function toggleGroup(groupId) {
             if (openGroups.has(groupId)) openGroups.delete(groupId);
             else openGroups.add(groupId);
-            document.getElementById(`group-${groupId}`)?.classList.toggle('open');
+            document.getElementById(\`group-\${groupId}\`)?.classList.toggle('open');
         }
         
         function toggleScheduleUI(groupId, webhookId) {
-            const box = document.getElementById(`schedule-box-${webhookId}`);
+            const box = document.getElementById(\`schedule-box-\${webhookId}\`);
             if (box.style.display === 'none') {
                 box.style.display = 'block';
             } else {
@@ -1774,15 +1822,15 @@ HTML_TEMPLATE = '''
         }
         
         async function saveWebhookSchedule(groupId, webhookId) {
-            const enabled = document.getElementById(`schedule-enabled-${webhookId}`).checked;
-            const startTime = document.getElementById(`schedule-start-${webhookId}`).value;
-            const endTime = document.getElementById(`schedule-end-${webhookId}`).value;
+            const enabled = document.getElementById(\`schedule-enabled-\${webhookId}\`).checked;
+            const startTime = document.getElementById(\`schedule-start-\${webhookId}\`).value;
+            const endTime = document.getElementById(\`schedule-end-\${webhookId}\`).value;
             
             if (enabled && (!startTime || !endTime)) {
                 return alert('請選擇開始和結束時間');
             }
             
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/schedule`, {
+            const res = await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/schedule\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ 
@@ -1829,15 +1877,15 @@ HTML_TEMPLATE = '''
         }
         
         async function deleteGroup(groupId) {
-            if (!confirm(`確定刪除群組 [${groupId}]？`)) return;
-            await fetch(`/api/group/${groupId}`, { method: 'DELETE' });
+            if (!confirm(\`確定刪除群組 [\${groupId}]？\`)) return;
+            await fetch(\`/api/group/\${groupId}\`, { method: 'DELETE' });
             openGroups.delete(groupId);
             showSaveIndicator();
             await loadData();
         }
         
         async function setMode(groupId, mode) {
-            const res = await fetch(`/api/group/${groupId}/mode`, {
+            const res = await fetch(\`/api/group/\${groupId}/mode\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ mode })
@@ -1850,10 +1898,10 @@ HTML_TEMPLATE = '''
         }
         
         async function addWebhook(groupId) {
-            const nameInput = document.getElementById(`webhook-name-${groupId}`);
-            const typeSelect = document.getElementById(`webhook-type-${groupId}`);
-            const urlInput = document.getElementById(`webhook-url-${groupId}`);
-            const fixedCheckbox = document.getElementById(`webhook-fixed-${groupId}`);
+            const nameInput = document.getElementById(\`webhook-name-\${groupId}\`);
+            const typeSelect = document.getElementById(\`webhook-type-\${groupId}\`);
+            const urlInput = document.getElementById(\`webhook-url-\${groupId}\`);
+            const fixedCheckbox = document.getElementById(\`webhook-fixed-\${groupId}\`);
             
             const name = nameInput.value.trim();
             const type = typeSelect.value;
@@ -1862,7 +1910,7 @@ HTML_TEMPLATE = '''
             
             if (!url) return alert('請輸入 Webhook URL');
             
-            const res = await fetch(`/api/group/${groupId}/webhook`, {
+            const res = await fetch(\`/api/group/\${groupId}/webhook\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ url, name: name || null, webhook_type: type, is_fixed: isFixed })
@@ -1870,10 +1918,18 @@ HTML_TEMPLATE = '''
             const result = await res.json();
             
             if (result.success) {
+                // ⭐ 成功後立即清空輸入框
                 nameInput.value = '';
                 urlInput.value = '';
                 typeSelect.value = 'discord';
                 fixedCheckbox.checked = false;
+                
+                // ⭐ 清除這些輸入框的緩存狀態
+                delete inputStates[nameInput.id];
+                delete inputStates[urlInput.id];
+                delete inputStates[typeSelect.id];
+                delete inputStates[fixedCheckbox.id];
+                
                 showSaveIndicator();
                 await loadData();
             } else {
@@ -1883,13 +1939,13 @@ HTML_TEMPLATE = '''
         
         async function removeWebhook(groupId, webhookId) {
             if (!confirm('確定移除？')) return;
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}`, { method: 'DELETE' });
+            await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}\`, { method: 'DELETE' });
             showSaveIndicator();
             await loadData();
         }
         
         async function toggleWebhook(groupId, webhookId, enabled) {
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}/toggle`, {
+            await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/toggle\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ enabled })
@@ -1899,7 +1955,7 @@ HTML_TEMPLATE = '''
         }
         
         async function toggleFixed(groupId, webhookId, isFixed) {
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}/fixed`, {
+            await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/fixed\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ is_fixed: isFixed })
@@ -1911,7 +1967,7 @@ HTML_TEMPLATE = '''
         async function renameWebhook(groupId, webhookId, currentName) {
             const newName = prompt('請輸入新名稱:', currentName);
             if (!newName || newName === currentName) return;
-            await fetch(`/api/group/${groupId}/webhook/${webhookId}`, {
+            await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}\`, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ name: newName })
@@ -1921,26 +1977,26 @@ HTML_TEMPLATE = '''
         }
         
         async function testWebhook(groupId, webhookId) {
-            const res = await fetch(`/api/group/${groupId}/webhook/${webhookId}/test`, {
+            const res = await fetch(\`/api/group/\${groupId}/webhook/\${webhookId}/test\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ content: `[測試] ${new Date().toLocaleTimeString()}` })
+                body: JSON.stringify({ content: \`[測試] \${new Date().toLocaleTimeString()}\` })
             });
             const result = await res.json();
-            alert(result.success ? '✅ 測試成功！' : `❌ ${result.message}`);
+            alert(result.success ? '✅ 測試成功！' : \`❌ \${result.message}\`);
             await loadData();
         }
         
         async function testGroup(groupId) {
-            const content = prompt('測試訊息:', `[測試] ${groupId.toUpperCase()} BOSS 通知`);
+            const content = prompt('測試訊息:', \`[測試] \${groupId.toUpperCase()} BOSS 通知\`);
             if (!content) return;
-            const res = await fetch(`/webhook/${groupId}`, {
+            const res = await fetch(\`/webhook/\${groupId}\`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ content })
             });
             const result = await res.json();
-            alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            alert(result.success ? \`✅ \${result.message}\` : \`❌ \${result.message}\`);
             await loadData();
         }
         
