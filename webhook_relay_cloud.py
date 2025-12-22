@@ -1585,8 +1585,30 @@ HTML_TEMPLATE = '''
     <script>
         const baseUrl = window.location.origin;
         let openGroups = new Set();
-        let openScheduleBoxes = new Set(); // 新增：追蹤打開的時段設定框
-        let inputStates = {}; // 新增：保存輸入框狀態
+        let openScheduleBoxes = new Set();
+        let inputStates = {};
+        let isUserInteracting = false; // 新增：追蹤用戶是否正在操作
+        let lastInteractionTime = 0; // 新增：最後操作時間
+        
+        // 新增：監聽用戶操作
+        document.addEventListener('DOMContentLoaded', function() {
+            document.body.addEventListener('mousedown', function() {
+                isUserInteracting = true;
+                lastInteractionTime = Date.now();
+            });
+            
+            document.body.addEventListener('keydown', function() {
+                isUserInteracting = true;
+                lastInteractionTime = Date.now();
+            });
+            
+            // 操作後 3 秒內視為「正在操作」
+            setInterval(() => {
+                if (Date.now() - lastInteractionTime > 10000) {
+                    isUserInteracting = false;
+                }
+            }, 500);
+        });
         
         function showSaveIndicator() {
             const el = document.getElementById('saveIndicator');
@@ -1594,17 +1616,14 @@ HTML_TEMPLATE = '''
             setTimeout(() => { el.style.display = 'none'; }, 2000);
         }
         
-        // 新增：保存所有輸入框的當前狀態
         function saveInputStates() {
             inputStates = {};
             
-            // 保存新群組輸入框
             const newGroupId = document.getElementById('newGroupId');
             const newGroupName = document.getElementById('newGroupName');
             if (newGroupId) inputStates.newGroupId = newGroupId.value;
             if (newGroupName) inputStates.newGroupName = newGroupName.value;
             
-            // 保存所有群組的 webhook 輸入框
             document.querySelectorAll('[id^="webhook-name-"]').forEach(input => {
                 inputStates[input.id] = input.value;
             });
@@ -1618,7 +1637,6 @@ HTML_TEMPLATE = '''
                 inputStates[checkbox.id] = checkbox.checked;
             });
             
-            // 保存所有時段設定的輸入框
             document.querySelectorAll('[id^="schedule-start-"]').forEach(input => {
                 inputStates[input.id] = input.value;
             });
@@ -1630,7 +1648,6 @@ HTML_TEMPLATE = '''
             });
         }
         
-        // 新增：恢復所有輸入框的狀態
         function restoreInputStates() {
             for (const [id, value] of Object.entries(inputStates)) {
                 const element = document.getElementById(id);
@@ -1644,19 +1661,16 @@ HTML_TEMPLATE = '''
             }
         }
         
-        // 新增：保存打開的時段設定框狀態
         function saveScheduleBoxStates() {
             openScheduleBoxes.clear();
             document.querySelectorAll('[id^="schedule-box-"]').forEach(box => {
                 if (box.style.display !== 'none') {
-                    // 從 id 中提取 webhook id
                     const webhookId = box.id.replace('schedule-box-', '');
                     openScheduleBoxes.add(webhookId);
                 }
             });
         }
         
-        // 新增：恢復打開的時段設定框狀態
         function restoreScheduleBoxStates() {
             openScheduleBoxes.forEach(webhookId => {
                 const box = document.getElementById(`schedule-box-${webhookId}`);
@@ -1667,8 +1681,13 @@ HTML_TEMPLATE = '''
         }
         
         async function loadData() {
+            // 如果用戶正在操作，延遲刷新
+            if (isUserInteracting) {
+                console.log('用戶正在操作，延遲刷新...');
+                return;
+            }
+            
             try {
-                // 在重新渲染前保存狀態
                 saveInputStates();
                 saveScheduleBoxStates();
                 
@@ -1687,7 +1706,6 @@ HTML_TEMPLATE = '''
                 
                 renderGroups(data.groups);
                 
-                // 渲染完成後恢復狀態
                 restoreInputStates();
                 restoreScheduleBoxStates();
             } catch (e) { console.error(e); }
@@ -1954,7 +1972,6 @@ HTML_TEMPLATE = '''
             const result = await res.json();
             
             if (result.success) {
-                // 只在成功後清空當前群組的輸入框
                 nameInput.value = '';
                 urlInput.value = '';
                 typeSelect.value = 'discord';
@@ -1969,7 +1986,7 @@ HTML_TEMPLATE = '''
         async function removeWebhook(groupId, webhookId) {
             if (!confirm('確定移除？')) return;
             await fetch(`/api/group/${groupId}/webhook/${webhookId}`, { method: 'DELETE' });
-            openScheduleBoxes.delete(webhookId); // 刪除時也移除打開狀態
+            openScheduleBoxes.delete(webhookId);
             showSaveIndicator();
             await loadData();
         }
