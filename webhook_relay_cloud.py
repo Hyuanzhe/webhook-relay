@@ -1587,10 +1587,11 @@ HTML_TEMPLATE = '''
         let openGroups = new Set();
         let openScheduleBoxes = new Set();
         let inputStates = {};
-        let isUserInteracting = false; // 新增：追蹤用戶是否正在操作
-        let lastInteractionTime = 0; // 新增：最後操作時間
+        let isUserInteracting = false;
+        let lastInteractionTime = 0;
+        let lastFullData = null; // 新增：保存完整數據
         
-        // 新增：監聽用戶操作
+        // 監聽用戶操作
         document.addEventListener('DOMContentLoaded', function() {
             document.body.addEventListener('mousedown', function() {
                 isUserInteracting = true;
@@ -1602,9 +1603,17 @@ HTML_TEMPLATE = '''
                 lastInteractionTime = Date.now();
             });
             
-            // 操作後 3 秒內視為「正在操作」
+            document.body.addEventListener('focus', function(e) {
+                // 監聽任何元素獲得焦點（包括 select、input[type="time"]）
+                if (e.target.matches('input, select, textarea')) {
+                    isUserInteracting = true;
+                    lastInteractionTime = Date.now();
+                }
+            }, true);
+            
+            // 操作後 5 秒內視為「正在操作」（增加到 5 秒更安全）
             setInterval(() => {
-                if (Date.now() - lastInteractionTime > 10000) {
+                if (Date.now() - lastInteractionTime > 5000) {
                     isUserInteracting = false;
                 }
             }, 500);
@@ -1680,35 +1689,46 @@ HTML_TEMPLATE = '''
             });
         }
         
-        async function loadData() {
-            // 如果用戶正在操作，延遲刷新
-            if (isUserInteracting) {
-                console.log('用戶正在操作，延遲刷新...');
-                return;
-            }
-            
+        // 新增：只更新統計數據，不重新渲染
+        function updateStatsOnly(data) {
+            document.getElementById('uptime').textContent = data.uptime;
+            document.getElementById('totalGroups').textContent = data.total_groups;
+            document.getElementById('totalReceived').textContent = data.total_received;
+            document.getElementById('totalSent').textContent = data.total_sent;
+            document.getElementById('totalFailed').textContent = data.total_failed;
+            document.getElementById('successRate').textContent = data.success_rate;
+            document.getElementById('configFile').textContent = data.config_file || '-';
+            document.getElementById('timezone').textContent = data.timezone || '-';
+            document.getElementById('currentTime').textContent = data.current_time || '-';
+        }
+        
+        async function loadData(forceFullRender = false) {
             try {
-                saveInputStates();
-                saveScheduleBoxStates();
-                
                 const res = await fetch('/api/stats');
                 const data = await res.json();
                 
-                document.getElementById('uptime').textContent = data.uptime;
-                document.getElementById('totalGroups').textContent = data.total_groups;
-                document.getElementById('totalReceived').textContent = data.total_received;
-                document.getElementById('totalSent').textContent = data.total_sent;
-                document.getElementById('totalFailed').textContent = data.total_failed;
-                document.getElementById('successRate').textContent = data.success_rate;
-                document.getElementById('configFile').textContent = data.config_file || '-';
-                document.getElementById('timezone').textContent = data.timezone || '-';
-                document.getElementById('currentTime').textContent = data.current_time || '-';
+                // 保存完整數據
+                lastFullData = data;
                 
+                // 如果用戶正在操作且不是強制刷新，只更新統計數據
+                if (isUserInteracting && !forceFullRender) {
+                    console.log('用戶正在操作，只更新統計數據...');
+                    updateStatsOnly(data);
+                    return;
+                }
+                
+                // 完整渲染
+                saveInputStates();
+                saveScheduleBoxStates();
+                
+                updateStatsOnly(data);
                 renderGroups(data.groups);
                 
                 restoreInputStates();
                 restoreScheduleBoxStates();
-            } catch (e) { console.error(e); }
+            } catch (e) { 
+                console.error(e); 
+            }
         }
         
         function renderGroups(groups) {
@@ -1897,7 +1917,7 @@ HTML_TEMPLATE = '''
             
             if (result.success) {
                 showSaveIndicator();
-                await loadData();
+                await loadData(true); // 強制完整刷新
                 alert('✅ ' + result.message);
             } else {
                 alert('❌ ' + result.message);
@@ -1926,7 +1946,7 @@ HTML_TEMPLATE = '''
                 document.getElementById('newGroupName').value = '';
                 openGroups.add(groupId.toLowerCase());
                 showSaveIndicator();
-                await loadData();
+                await loadData(true);
             } else alert('❌ ' + result.message);
         }
         
@@ -1935,7 +1955,7 @@ HTML_TEMPLATE = '''
             await fetch(`/api/group/${groupId}`, { method: 'DELETE' });
             openGroups.delete(groupId);
             showSaveIndicator();
-            await loadData();
+            await loadData(true);
         }
         
         async function setMode(groupId, mode) {
@@ -1947,7 +1967,7 @@ HTML_TEMPLATE = '''
             const result = await res.json();
             if (result.success) { 
                 showSaveIndicator(); 
-                await loadData(); 
+                await loadData(true); 
             } else alert('❌ ' + result.message);
         }
         
@@ -1977,7 +1997,7 @@ HTML_TEMPLATE = '''
                 typeSelect.value = 'discord';
                 fixedCheckbox.checked = false;
                 showSaveIndicator();
-                await loadData();
+                await loadData(true);
             } else {
                 alert('❌ ' + result.message);
             }
@@ -1988,7 +2008,7 @@ HTML_TEMPLATE = '''
             await fetch(`/api/group/${groupId}/webhook/${webhookId}`, { method: 'DELETE' });
             openScheduleBoxes.delete(webhookId);
             showSaveIndicator();
-            await loadData();
+            await loadData(true);
         }
         
         async function toggleWebhook(groupId, webhookId, enabled) {
@@ -1998,7 +2018,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify({ enabled })
             });
             showSaveIndicator();
-            await loadData();
+            await loadData(true);
         }
         
         async function toggleFixed(groupId, webhookId, isFixed) {
@@ -2008,7 +2028,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify({ is_fixed: isFixed })
             });
             showSaveIndicator();
-            await loadData();
+            await loadData(true);
         }
         
         async function renameWebhook(groupId, webhookId, currentName) {
@@ -2020,7 +2040,7 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify({ name: newName })
             });
             showSaveIndicator();
-            await loadData();
+            await loadData(true);
         }
         
         async function testWebhook(groupId, webhookId) {
@@ -2031,7 +2051,7 @@ HTML_TEMPLATE = '''
             });
             const result = await res.json();
             alert(result.success ? '✅ 測試成功！' : `❌ ${result.message}`);
-            await loadData();
+            await loadData(true);
         }
         
         async function testGroup(groupId) {
@@ -2044,7 +2064,7 @@ HTML_TEMPLATE = '''
             });
             const result = await res.json();
             alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
-            await loadData();
+            await loadData(true);
         }
         
         document.getElementById('newGroupId').addEventListener('keypress', e => { if (e.key === 'Enter') createGroup(); });
