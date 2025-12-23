@@ -50,8 +50,8 @@ DEFAULT_GROUPS_JSON = os.environ.get('WEBHOOK_GROUPS', '{}')
 PORT = int(os.environ.get('PORT', 5000))
 
 # 飛書應用憑證
-FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', 'cli_a98f2ae2ea3b900e')
-FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', 'Ez8BLvrXG3kvWg6avZqD3gduuc5Pg0uf')
+FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', 'cli_a9c360e3bf38dceb')
+FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '13RovMCvTMt34MVFrj3lzgoUaCWcJZ8b')
 
 # 配置文件路徑
 CONFIG_FILE = os.environ.get('CONFIG_FILE', 'webhook_config.json')
@@ -2172,3 +2172,4 @@ if __name__ == '__main__':
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+
