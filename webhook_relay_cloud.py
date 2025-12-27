@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-    🔄 Webhook 中繼站 v4.2 FINAL - Webhook 層級時段控制版
+    🔄 Webhook 中繼站 v4.3 - 支援 Web 介面更新飛書憑證
 ================================================================================
 
 核心功能：
+    - 🆕 Web 介面動態更新飛書憑證（無需重啟）
     - 🆕 Webhook 時段控制（每個 Webhook 可設定自己的通知時間範圍）
     - 🆕 固定 Webhook（無論模式都會發送）
-    - 🆕 修正設定 Webhook 時輸入框被清空的問題
     - JSON 文件持久化存儲（自動保存/載入配置）
     - 支援硬編碼預設 Webhook（重啟自動恢復）
     - 兩種發送模式：同步模式 / 輪詢模式
@@ -22,8 +22,8 @@
     3. 環境變數 WEBHOOK_GROUPS
 
 作者: @yyv3vnn
-版本: 4.2 FINAL
-更新: 2025-12-22
+版本: 4.3
+更新: 2025-12-28
 ================================================================================
 """
 
@@ -49,9 +49,9 @@ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
 DEFAULT_GROUPS_JSON = os.environ.get('WEBHOOK_GROUPS', '{}')
 PORT = int(os.environ.get('PORT', 5000))
 
-# 飛書應用憑證
-FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', 'cli_a9c360e3bf38dceb')
-FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '13RovMCvTMt34MVFrj3lzgoUaCWcJZ8b')
+# 飛書應用憑證（預設值，可透過 Web 介面更新）
+FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', 'cli_a9dae0436f38dbcd')
+FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', 'Brdq4CElOawyTEXZqUUhIv4xrfGoq7Eq')
 
 # 配置文件路徑
 CONFIG_FILE = os.environ.get('CONFIG_FILE', 'webhook_config.json')
@@ -511,7 +511,6 @@ class MessageSender:
             # 如果有圖片，發送圖片
             if image_data:
                 try:
-                    # 企業微信圖片需要 Base64 + MD5
                     img_base64 = base64.b64encode(image_data).decode()
                     img_md5 = hashlib.md5(image_data).hexdigest()
                     
@@ -530,11 +529,9 @@ class MessageSender:
                         logger.info("✅ 企業微信圖片發送成功")
                     else:
                         logger.warning(f"⚠️ 企業微信圖片發送失敗: {img_result.get('errmsg')}")
-                        # 文字已發送成功，圖片失敗不影響整體結果
                 
                 except Exception as img_e:
                     logger.warning(f"⚠️ 企業微信圖片發送異常: {img_e}")
-                    # 文字已發送成功，圖片失敗不影響整體結果
             
             return True
             
@@ -543,8 +540,8 @@ class MessageSender:
             return False
 
 
-# ================================================================================  # ← 注意這裡沒有縮排！
-# BOSS 群組類別 - 移除群組層級時段控制
+# ================================================================================
+# BOSS 群組類別
 # ================================================================================
 
 class BossGroup:
@@ -653,7 +650,7 @@ class BossGroup:
         return [wh for wh in self.webhooks if wh.is_fixed and wh.enabled]
     
     def get_next_webhook_round_robin(self) -> WebhookItem:
-        enabled = self.get_enabled_webhooks(exclude_fixed=True)  # 輪詢時排除固定的
+        enabled = self.get_enabled_webhooks(exclude_fixed=True)
         if not enabled:
             return None
         self.current_index = self.current_index % len(enabled)
@@ -808,11 +805,11 @@ class BossGroup:
 
 
 # ================================================================================
-# 中繼站管理器（帶持久化）
+# 中繼站管理器（帶持久化 + 飛書憑證管理）
 # ================================================================================
 
 class WebhookRelayManager:
-    """Webhook 中繼站管理器 - 支援持久化存儲"""
+    """Webhook 中繼站管理器 - 支援持久化存儲 + 飛書憑證管理"""
     
     def __init__(self):
         self.groups = {}
@@ -821,6 +818,10 @@ class WebhookRelayManager:
         self._save_lock = threading.Lock()
         self._save_timer = None
         
+        # 飛書憑證（可動態更新）
+        self.feishu_app_id = FEISHU_APP_ID
+        self.feishu_app_secret = FEISHU_APP_SECRET
+        
         # 載入配置
         self._load_config()
         
@@ -828,11 +829,12 @@ class WebhookRelayManager:
         atexit.register(self._save_config_sync)
         
         logger.info("=" * 60)
-        logger.info("🔄 Webhook 中繼站 v4.2 FINAL (Webhook 時段控制版)")
+        logger.info("🔄 Webhook 中繼站 v4.3 (飛書憑證管理版)")
         logger.info(f"📡 已配置 {len(self.groups)} 個 BOSS 群組")
         logger.info(f"💾 配置文件: {CONFIG_FILE}")
         logger.info(f"🕐 時區: UTC{'+' if TIMEZONE_OFFSET >= 0 else ''}{TIMEZONE_OFFSET}")
         logger.info(f"🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
+        logger.info(f"📱 飛書 APP ID: {self.feishu_app_id[:10]}..." if self.feishu_app_id else "📱 飛書憑證: 未設定")
         logger.info("=" * 60)
     
     def _load_config(self):
@@ -844,6 +846,18 @@ class WebhookRelayManager:
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
+                
+                # 載入飛書憑證
+                if 'feishu_credentials' in config:
+                    self.feishu_app_id = config['feishu_credentials'].get('app_id', FEISHU_APP_ID)
+                    self.feishu_app_secret = config['feishu_credentials'].get('app_secret', FEISHU_APP_SECRET)
+                    
+                    # 更新全域變數
+                    global FEISHU_APP_ID, FEISHU_APP_SECRET
+                    FEISHU_APP_ID = self.feishu_app_id
+                    FEISHU_APP_SECRET = self.feishu_app_secret
+                    
+                    logger.info(f"✅ 從 JSON 載入飛書憑證: {self.feishu_app_id[:10]}...")
                 
                 for group_id, group_data in config.get('groups', {}).items():
                     group = BossGroup.from_dict(group_id, group_data)
@@ -895,7 +909,6 @@ class WebhookRelayManager:
                 for group_id, webhooks in groups_config.items():
                     group = self.get_or_create_group(group_id)
                     for webhook_url in webhooks:
-                        # 避免重複添加
                         exists = any(wh.url == webhook_url for wh in group.webhooks)
                         if not exists:
                             group.add_webhook(webhook_url)
@@ -914,8 +927,12 @@ class WebhookRelayManager:
         """同步保存配置到 JSON 文件"""
         try:
             config = {
-                "version": "4.2",
+                "version": "4.3",
                 "updated_at": get_local_time_str(),
+                "feishu_credentials": {
+                    "app_id": self.feishu_app_id,
+                    "app_secret": self.feishu_app_secret
+                },
                 "groups": {}
             }
             
@@ -933,6 +950,42 @@ class WebhookRelayManager:
             
         except Exception as e:
             logger.error(f"❌ 保存配置失敗: {e}")
+    
+    def update_feishu_credentials(self, app_id: str, app_secret: str) -> tuple:
+        """更新飛書應用憑證"""
+        try:
+            if not app_id or not app_secret:
+                return False, "APP ID 和 APP Secret 不能為空"
+            
+            with self.lock:
+                self.feishu_app_id = app_id.strip()
+                self.feishu_app_secret = app_secret.strip()
+            
+            # 更新全域變數
+            global FEISHU_APP_ID, FEISHU_APP_SECRET
+            FEISHU_APP_ID = self.feishu_app_id
+            FEISHU_APP_SECRET = self.feishu_app_secret
+            
+            # 清空上傳器的 token 緩存，強制重新獲取
+            feishu_uploader.token_cache = {'token': None, 'expire_time': 0}
+            
+            self._schedule_save()
+            logger.info(f"✅ 飛書憑證已更新: {app_id[:10]}...")
+            
+            return True, "飛書憑證已更新並保存"
+        except Exception as e:
+            logger.error(f"❌ 更新飛書憑證失敗: {e}")
+            return False, f"更新失敗: {str(e)}"
+    
+    def get_feishu_credentials(self) -> dict:
+        """獲取飛書憑證（隱藏部分內容）"""
+        return {
+            "app_id": self.feishu_app_id,
+            "app_id_masked": f"{self.feishu_app_id[:10]}..." if self.feishu_app_id and len(self.feishu_app_id) > 10 else self.feishu_app_id,
+            "app_secret": self.feishu_app_secret,
+            "app_secret_masked": f"{self.feishu_app_secret[:8]}..." if self.feishu_app_secret and len(self.feishu_app_secret) > 8 else "***",
+            "is_configured": bool(self.feishu_app_id and self.feishu_app_secret)
+        }
     
     def create_group(self, group_id: str, display_name: str = None) -> BossGroup:
         with self.lock:
@@ -1089,6 +1142,25 @@ def receive_webhook_default():
 @requires_auth
 def get_stats():
     return jsonify(manager.get_all_stats())
+
+
+@app.route('/api/feishu/credentials', methods=['GET'])
+@requires_auth
+def get_feishu_credentials():
+    """獲取飛書憑證（脫敏）"""
+    return jsonify(manager.get_feishu_credentials())
+
+
+@app.route('/api/feishu/credentials', methods=['POST'])
+@requires_auth
+def update_feishu_credentials():
+    """更新飛書憑證"""
+    data = request.get_json()
+    app_id = data.get('app_id', '').strip()
+    app_secret = data.get('app_secret', '').strip()
+    
+    success, message = manager.update_feishu_credentials(app_id, app_secret)
+    return jsonify({"success": success, "message": message})
 
 
 @app.route('/api/group', methods=['POST'])
@@ -1250,13 +1322,13 @@ def force_save():
 def health():
     return jsonify({
         "status": "ok", 
-        "version": "4.2", 
+        "version": "4.3", 
         "groups": len(manager.groups), 
         "config_file": CONFIG_FILE
     })
 
 # ================================================================================
-# 將以下內容替換原文件中從 "HTML_TEMPLATE = '''" 開始到最後的 "app.run" 之前的所有內容
+# HTML 模板
 # ================================================================================
 
 HTML_TEMPLATE = '''
@@ -1265,7 +1337,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔄 Webhook 中繼站 v4.2</title>
+    <title>🔄 Webhook 中繼站 v4.3</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -1497,7 +1569,7 @@ HTML_TEMPLATE = '''
         .btn-yellow { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
         .btn-sm { padding: 4px 8px; font-size: 0.75em; }
         
-        input[type="text"], input[type="time"], select {
+        input[type="text"], input[type="password"], input[type="time"], select {
             padding: 8px 10px;
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 5px;
@@ -1505,8 +1577,8 @@ HTML_TEMPLATE = '''
             color: #fff;
             font-size: 0.85em;
         }
-        input[type="text"]::placeholder { color: rgba(255,255,255,0.4); }
-        input[type="text"]:focus, input[type="time"]:focus, select:focus { outline: none; border-color: #00d4ff; }
+        input[type="text"]::placeholder, input[type="password"]::placeholder { color: rgba(255,255,255,0.4); }
+        input[type="text"]:focus, input[type="password"]:focus, input[type="time"]:focus, select:focus { outline: none; border-color: #00d4ff; }
         select { cursor: pointer; }
         select option { background: #1a1a3e; color: #fff; }
         
@@ -1568,6 +1640,9 @@ HTML_TEMPLATE = '''
             border-radius: 8px; font-weight: bold; display: none; z-index: 1000;
         }
         
+        .feishu-status-ok { color: #00ff88; }
+        .feishu-status-error { color: #ff4757; }
+        
         @media (max-width: 600px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .group-header { flex-direction: column; align-items: flex-start; }
@@ -1577,8 +1652,8 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <div class="container">
-        <h1>🔄 Webhook 中繼站 v4.2</h1>
-        <p class="subtitle">持久化存儲版 + Webhook 時段控制 + 固定 Webhook | 運行: <span id="uptime">-</span></p>
+        <h1>🔄 Webhook 中繼站 v4.3</h1>
+        <p class="subtitle">飛書憑證管理版 + Webhook 時段控制 + 固定 Webhook | 運行: <span id="uptime">-</span></p>
         <p class="config-info">💾 配置: <span id="configFile">-</span> | 🕐 時區: <span id="timezone">-</span> | 當前: <span id="currentTime">-</span></p>
         
         <div class="card">
@@ -1608,6 +1683,20 @@ HTML_TEMPLATE = '''
         </div>
         
         <div class="card">
+            <h2>📱 飛書應用憑證設定</h2>
+            <div style="font-size: 0.85em; margin-bottom: 10px; opacity: 0.8;">
+                <p>用於上傳圖片到飛書。修改後會自動保存到配置文件，無需重啟。</p>
+                <p>狀態: <span id="feishuStatus">載入中...</span></p>
+            </div>
+            <div class="flex-row">
+                <input type="text" id="feishuAppId" placeholder="APP ID" style="flex: 1; min-width: 200px;">
+                <input type="password" id="feishuAppSecret" placeholder="APP Secret" style="flex: 1; min-width: 200px;">
+                <button class="btn btn-success" onclick="updateFeishuCredentials()">💾 保存</button>
+                <button class="btn btn-purple btn-sm" onclick="toggleFeishuSecretVisibility()">👁️</button>
+            </div>
+        </div>
+        
+        <div class="card">
             <h2>➕ 建立新 BOSS 群組</h2>
             <div class="flex-row">
                 <input type="text" id="newGroupId" placeholder="群組 ID (英文/數字)" style="max-width: 150px;">
@@ -1624,16 +1713,16 @@ HTML_TEMPLATE = '''
         <div class="card">
             <h2>📖 使用說明</h2>
             <div style="font-size: 0.85em; line-height: 1.8;">
-                <p><strong>🆕 v4.2 新功能：</strong></p>
+                <p><strong>🆕 v4.3 新功能：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
+                    <li>📱 <strong>Web 介面管理飛書憑證</strong>：無需重啟，即時生效</li>
                     <li>⏰ <strong>Webhook 時段控制</strong>：每個 Webhook 可設定自己的通知時間範圍</li>
                     <li>📌 <strong>固定 Webhook</strong>：無論同步/輪詢模式都會發送</li>
-                    <li>🔧 修正設定時輸入框被清空的問題</li>
                 </ul>
                 <p><strong>💾 持久化存儲：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
                     <li>所有配置自動保存到 JSON 文件</li>
-                    <li>重啟後自動恢復所有 Webhook 設定</li>
+                    <li>重啟後自動恢復所有 Webhook 設定和飛書憑證</li>
                 </ul>
                 <p><strong>📡 發送模式：</strong></p>
                 <ul style="margin-left: 20px; margin-bottom: 10px;">
@@ -1655,9 +1744,8 @@ HTML_TEMPLATE = '''
         let inputStates = {};
         let isUserInteracting = false;
         let lastInteractionTime = 0;
-        let lastFullData = null; // 新增：保存完整數據
+        let lastFullData = null;
         
-        // 監聽用戶操作
         document.addEventListener('DOMContentLoaded', function() {
             document.body.addEventListener('mousedown', function() {
                 isUserInteracting = true;
@@ -1670,19 +1758,19 @@ HTML_TEMPLATE = '''
             });
             
             document.body.addEventListener('focus', function(e) {
-                // 監聽任何元素獲得焦點（包括 select、input[type="time"]）
                 if (e.target.matches('input, select, textarea')) {
                     isUserInteracting = true;
                     lastInteractionTime = Date.now();
                 }
             }, true);
             
-            // 操作後 5 秒內視為「正在操作」（增加到 5 秒更安全）
             setInterval(() => {
                 if (Date.now() - lastInteractionTime > 5000) {
                     isUserInteracting = false;
                 }
             }, 500);
+            
+            loadFeishuCredentials();
         });
         
         function showSaveIndicator() {
@@ -1755,7 +1843,6 @@ HTML_TEMPLATE = '''
             });
         }
         
-        // 新增：只更新統計數據，不重新渲染
         function updateStatsOnly(data) {
             document.getElementById('uptime').textContent = data.uptime;
             document.getElementById('totalGroups').textContent = data.total_groups;
@@ -1773,17 +1860,14 @@ HTML_TEMPLATE = '''
                 const res = await fetch('/api/stats');
                 const data = await res.json();
                 
-                // 保存完整數據
                 lastFullData = data;
                 
-                // 如果用戶正在操作且不是強制刷新，只更新統計數據
                 if (isUserInteracting && !forceFullRender) {
                     console.log('用戶正在操作，只更新統計數據...');
                     updateStatsOnly(data);
                     return;
                 }
                 
-                // 完整渲染
                 saveInputStates();
                 saveScheduleBoxStates();
                 
@@ -1797,7 +1881,55 @@ HTML_TEMPLATE = '''
             }
         }
         
-        function renderGroups(groups) {
+        async function loadFeishuCredentials() {
+            try {
+                const res = await fetch('/api/feishu/credentials');
+                const data = await res.json();
+                
+                document.getElementById('feishuAppId').value = data.app_id || '';
+                document.getElementById('feishuAppSecret').value = data.app_secret || '';
+                
+                const statusEl = document.getElementById('feishuStatus');
+                if (data.is_configured) {
+                    statusEl.innerHTML = `<span class="feishu-status-ok">✅ 已配置 (${data.app_id_masked})</span>`;
+                } else {
+                    statusEl.innerHTML = `<span class="feishu-status-error">❌ 未配置</span>`;
+                }
+            } catch (e) {
+                console.error('載入飛書憑證失敗:', e);
+            }
+        }
+        
+        async function updateFeishuCredentials() {
+            const appId = document.getElementById('feishuAppId').value.trim();
+            const appSecret = document.getElementById('feishuAppSecret').value.trim();
+            
+            if (!appId || !appSecret) {
+                return alert('請填寫完整的 APP ID 和 APP Secret');
+            }
+            
+            const res = await fetch('/api/feishu/credentials', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ app_id: appId, app_secret: appSecret })
+            });
+            const result = await res.json();
+            
+            if (result.success) {
+                showSaveIndicator();
+                await loadFeishuCredentials();
+                alert('✅ ' + result.message);
+            } else {
+                alert('❌ ' + result.message);
+            }
+        }
+        
+        function toggleFeishuSecretVisibility() {
+            const input = document.getElementById('feishuAppSecret');
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+		
+		function renderGroups(groups) {
             const container = document.getElementById('groupList');
             if (!groups || groups.length === 0) {
                 container.innerHTML = '<div class="no-data">尚未建立任何群組</div>';
@@ -1983,7 +2115,7 @@ HTML_TEMPLATE = '''
             
             if (result.success) {
                 showSaveIndicator();
-                await loadData(true); // 強制完整刷新
+                await loadData(true);
                 alert('✅ ' + result.message);
             } else {
                 alert('❌ ' + result.message);
@@ -2143,15 +2275,14 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-
 # ================================================================================
 # 主程式
 # ================================================================================
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("  🔄 Webhook 中繼站 v4.2 FINAL")
-    print("  Webhook 層級時段控制版")
+    print("  🔄 Webhook 中繼站 v4.3")
+    print("  飛書憑證管理版")
     print("=" * 60)
     print(f"  📡 本地訪問: http://localhost:{PORT}")
     print(f"  💾 配置文件: {CONFIG_FILE}")
@@ -2159,17 +2290,16 @@ if __name__ == '__main__':
     print(f"  🔐 密碼保護: {'啟用' if ADMIN_PASSWORD else '停用'}")
     print("=" * 60)
     print()
-    print("  🆕 v4.2 FINAL 新功能:")
+    print("  🆕 v4.3 新功能:")
+    print("    - 📱 Web 介面管理飛書憑證：無需重啟，即時生效")
     print("    - ⏰ Webhook 時段控制：每個 Webhook 可設定自己的通知時段")
     print("    - 📌 固定 Webhook：無論同步/輪詢都會發送")
-    print("    - 🔧 修正設定 Webhook 時輸入框被清空的問題")
     print()
     print("  📝 使用說明:")
     print("    - 編輯 PRESET_WEBHOOKS 設定預設配置")
     print("    - 所有變更會自動保存到 JSON 文件")
     print("    - 重啟後自動恢復所有設定")
-    print("    - 點擊每個 Webhook 的 ⏰ 按鈕設定時段")
+    print("    - 在 Web 介面更新飛書憑證，無需修改環境變數")
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
-
