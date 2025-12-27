@@ -253,10 +253,25 @@ class FeishuImageUploader:
     def __init__(self):
         self.upload_cache = {}
         self.token_cache = {'token': None, 'expire_time': 0}
+        self.app_id = None
+        self.app_secret = None
+    
+    def set_credentials(self, app_id: str, app_secret: str):
+        """設定飛書憑證"""
+        self.app_id = app_id
+        self.app_secret = app_secret
     
     def get_tenant_access_token(self) -> str:
         """獲取 tenant_access_token（帶緩存）"""
         try:
+            # 如果憑證未設定，使用全域變數
+            app_id = self.app_id or FEISHU_APP_ID
+            app_secret = self.app_secret or FEISHU_APP_SECRET
+            
+            if not app_id or not app_secret:
+                logger.warning("⚠️ 飛書憑證未設定")
+                return None
+            
             current_time = time.time()
             if self.token_cache['token'] and current_time < self.token_cache['expire_time'] - 60:
                 logger.info("🔄 使用緩存的 access_token")
@@ -264,7 +279,7 @@ class FeishuImageUploader:
             
             logger.info("🔑 開始獲取新的 access_token...")
             url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-            payload = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
+            payload = {"app_id": app_id, "app_secret": app_secret}
             
             response = requests.post(url, json=payload, timeout=10)
             logger.info(f"📥 Token 響應狀態碼: {response.status_code}")
@@ -848,16 +863,19 @@ class WebhookRelayManager:
                     config = json.load(f)
                 
                 # 載入飛書憑證
-                if 'feishu_credentials' in config:
-                    self.feishu_app_id = config['feishu_credentials'].get('app_id', FEISHU_APP_ID)
-                    self.feishu_app_secret = config['feishu_credentials'].get('app_secret', FEISHU_APP_SECRET)
-                    
-                    # 更新全域變數
-                    global FEISHU_APP_ID, FEISHU_APP_SECRET
-                    FEISHU_APP_ID = self.feishu_app_id
-                    FEISHU_APP_SECRET = self.feishu_app_secret
-                    
-                    logger.info(f"✅ 從 JSON 載入飛書憑證: {self.feishu_app_id[:10]}...")
+				if 'feishu_credentials' in config:
+					self.feishu_app_id = config['feishu_credentials'].get('app_id', FEISHU_APP_ID)
+					self.feishu_app_secret = config['feishu_credentials'].get('app_secret', FEISHU_APP_SECRET)
+					
+					# 更新全域變數
+					global FEISHU_APP_ID, FEISHU_APP_SECRET
+					FEISHU_APP_ID = self.feishu_app_id
+					FEISHU_APP_SECRET = self.feishu_app_secret
+					
+					# 更新上傳器的憑證  ← 添加這行
+					feishu_uploader.set_credentials(self.feishu_app_id, self.feishu_app_secret)
+					
+					logger.info(f"✅ 從 JSON 載入飛書憑證: {self.feishu_app_id[:10]}...")
                 
                 for group_id, group_data in config.get('groups', {}).items():
                     group = BossGroup.from_dict(group_id, group_data)
@@ -952,27 +970,30 @@ class WebhookRelayManager:
             logger.error(f"❌ 保存配置失敗: {e}")
     
     def update_feishu_credentials(self, app_id: str, app_secret: str) -> tuple:
-        """更新飛書應用憑證"""
-        try:
-            if not app_id or not app_secret:
-                return False, "APP ID 和 APP Secret 不能為空"
-            
-            with self.lock:
-                self.feishu_app_id = app_id.strip()
-                self.feishu_app_secret = app_secret.strip()
-            
-            # 更新全域變數
-            global FEISHU_APP_ID, FEISHU_APP_SECRET
-            FEISHU_APP_ID = self.feishu_app_id
-            FEISHU_APP_SECRET = self.feishu_app_secret
-            
-            # 清空上傳器的 token 緩存，強制重新獲取
-            feishu_uploader.token_cache = {'token': None, 'expire_time': 0}
-            
-            self._schedule_save()
-            logger.info(f"✅ 飛書憑證已更新: {app_id[:10]}...")
-            
-            return True, "飛書憑證已更新並保存"
+		"""更新飛書應用憑證"""
+		try:
+			if not app_id or not app_secret:
+				return False, "APP ID 和 APP Secret 不能為空"
+			
+			with self.lock:
+				self.feishu_app_id = app_id.strip()
+				self.feishu_app_secret = app_secret.strip()
+			
+			# 更新全域變數
+			global FEISHU_APP_ID, FEISHU_APP_SECRET
+			FEISHU_APP_ID = self.feishu_app_id
+			FEISHU_APP_SECRET = self.feishu_app_secret
+			
+			# 更新上傳器的憑證  ← 添加這行
+			feishu_uploader.set_credentials(self.feishu_app_id, self.feishu_app_secret)
+			
+			# 清空上傳器的 token 緩存，強制重新獲取
+			feishu_uploader.token_cache = {'token': None, 'expire_time': 0}
+			
+			self._schedule_save()
+			logger.info(f"✅ 飛書憑證已更新: {app_id[:10]}...")
+			
+			return True, "飛書憑證已更新並保存"
         except Exception as e:
             logger.error(f"❌ 更新飛書憑證失敗: {e}")
             return False, f"更新失敗: {str(e)}"
