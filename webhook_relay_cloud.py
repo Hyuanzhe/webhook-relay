@@ -679,8 +679,16 @@ class BossGroup:
         results = []
         
         feishu_image_key = None
+        # 只有在有啟用的飛書 Webhook 且在時段內時才上傳圖片
         if image_data:
-            feishu_image_key = feishu_uploader.upload_image(image_data)
+            has_active_feishu = any(
+                wh.enabled and 
+                wh.webhook_type == 'feishu' and 
+                wh.is_in_schedule()
+                for wh in self.webhooks
+            )
+            if has_active_feishu:
+                feishu_image_key = feishu_uploader.upload_image(image_data)
         
         with self.lock:
             # 1. 先發送固定的 Webhook（檢查時段）
