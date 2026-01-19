@@ -674,6 +674,47 @@ class BossGroup:
         return webhook
     
     def relay_message(self, content: str, image_data: bytes = None, source_ip: str = "unknown") -> tuple:
+        """
+        中繼訊息到 Webhook（帶過濾功能）
+        
+        🔥 新增：過濾純文字 BOSS 檢測訊息
+        - 如果沒有圖片且包含關鍵字，則不發送
+        """
+        # ============================================
+        # 🔥 過濾純文字 BOSS 檢測訊息
+        # ============================================
+        if not image_data and content:
+            # 定義要過濾的關鍵字
+            filter_keywords = [
+                "偵測到HP血條",
+                "BOSS存在", 
+                "⏰ 時間:",
+                "🩸"
+            ]
+            
+            # 檢查是否包含任何關鍵字
+            should_filter = any(keyword in content for keyword in filter_keywords)
+            
+            if should_filter:
+                logger.info(f"[{self.group_id}] 🚫 過濾純文字 BOSS 檢測訊息: {content[:50]}...")
+                
+                # 記錄到歷史
+                timestamp = get_local_time_str()
+                self.history.appendleft({
+                    "time": timestamp,
+                    "content": content[:50] + "..." if len(content) > 50 else content,
+                    "status": "🚫 已過濾（純文字）",
+                    "source": source_ip[-15:],
+                    "has_image": False,
+                    "mode": "過濾"
+                })
+                
+                # 返回成功但不實際發送
+                return True, "已過濾純文字訊息", []
+        
+        # ============================================
+        # 原本的邏輯
+        # ============================================
         self.stats["received"] += 1
         timestamp = get_local_time_str()
         results = []
@@ -2336,3 +2377,4 @@ if __name__ == '__main__':
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+
