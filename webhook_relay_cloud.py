@@ -123,6 +123,13 @@ PRESET_WEBHOOKS = {
                 "enabled": True,
                 "is_fixed": False
             },
+            {
+                "name": "喵z固定記數",
+                "url": "https://discordapp.com/api/webhooks/1453064998355210291/xnPVQqIIrwFh3ZUXgC9w7ZTCxlMZ9sFx9w42PWFCE0w0Ku2fh2TjloWUgirsef0GaodU",
+                "type": "discord",
+                "enabled": True,
+                "is_fixed": False
+            },
         ]
     },
     
@@ -142,6 +149,13 @@ PRESET_WEBHOOKS = {
                 "name": "蘑菇飛書通知",
                 "url": "https://open.feishu.cn/open-apis/bot/v2/hook/97a7254b-563f-4115-a0e6-9ebdd174bb7d",
                 "type": "feishu",
+                "enabled": True,
+                "is_fixed": False
+            },
+            {
+                "name": "蘑菇固定記數",
+                "url": "https://discordapp.com/api/webhooks/1453064913114370048/wTtrO6rTs22Hlpt8avLmFMUu1oNtwYuZsAMT--uyHaS9RlIMn6vmvuPjLPhtK3Hdz3Of",
+                "type": "discord",
                 "enabled": True,
                 "is_fixed": False
             },
@@ -219,9 +233,9 @@ PRESET_WEBHOOKS = {
                 "is_fixed": False
             },
             {
-                "name": "小巴企業微信通知",
-                "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=c1fd1bc4-33b5-4e0c-b4b0-e6b814101048",
-                "type": "wecom",
+                "name": "小巴固定記數",
+                "url": "https://discordapp.com/api/webhooks/1453064747128979656/-VJbdKPoeKhdCLc_hYlHf2HT6ysApOGDn9joiyYwCOzwTxwXkr0DzaDWpUTCZLFhMPKB",
+                "type": "discord",
                 "enabled": True,
                 "is_fixed": False
             },
@@ -243,6 +257,34 @@ PRESET_WEBHOOKS = {
             {
                 "name": "書生飛書通知",
                 "url": "https://open.feishu.cn/open-apis/bot/v2/hook/a5ff3842-fbeb-4508-87cf-8e8e62824044",
+                "type": "feishu",
+                "enabled": True,
+                "is_fixed": False
+            },
+            {
+                "name": "皮蛋老闆書生",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/6754e60c-be48-4454-bea8-4d27831218d4",
+                "type": "feishu",
+                "enabled": True,
+                "is_fixed": False
+            },
+            {
+                "name": "牛牛老板書生(24h)",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/9082d4d4-e2ff-49bf-9b5b-4f9ae85ba42e",
+                "type": "feishu",
+                "enabled": True,
+                "is_fixed": False
+            },
+            {
+                "name": "路況書生",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/75dda4ad-f3fa-4aa8-b69f-a9576171e682",
+                "type": "feishu",
+                "enabled": True,
+                "is_fixed": False
+            },
+            {
+                "name": "rock書生",
+                "url": "https://open.feishu.cn/open-apis/bot/v2/hook/cccf7729-bc94-4486-897a-5f35f4320d0b",
                 "type": "feishu",
                 "enabled": True,
                 "is_fixed": False
@@ -2034,7 +2076,7 @@ HTML_TEMPLATE = '''
                                 <div class="schedule-panel ${w.schedule_mode !== 'off' ? 'active' : ''}" id="sp-${w.id}" style="display:none">
                                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
                                         <label class="toggle-switch">
-                                            <input type="checkbox" id="sm-${w.id}" ${w.schedule_mode !== 'off' ? 'checked' : ''}>
+                                            <input type="checkbox" id="sm-${w.id}" ${w.schedule_mode !== 'off' ? 'checked' : ''} onchange="toggleScheduleMode('${g.group_id}', '${w.id}', this.checked)">
                                             <span class="toggle-slider"></span>
                                         </label>
                                         <span>啟用日期排程</span>
@@ -2105,6 +2147,17 @@ HTML_TEMPLATE = '''
             return null;
         }
         
+        async function toggleScheduleMode(groupId, webhookId, enabled) {
+            const w = await getWebhookData(groupId, webhookId);
+            if (!w) return;
+            const res = await (await fetch('/api/group/' + groupId + '/webhook/' + webhookId + '/schedule', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ schedule_mode: enabled ? 'date_range' : 'off', schedules: w.schedules || [] })
+            })).json();
+            if (res.success) { showSave(); await loadData(true); }
+            else alert(res.message);
+        }
+
         async function addScheduleItem(groupId, webhookId) {
             const dateVal = document.getElementById('sd-' + webhookId).value;
             const startVal = document.getElementById('ss-' + webhookId).value;
