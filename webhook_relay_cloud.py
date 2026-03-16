@@ -1346,6 +1346,31 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+@app.route('/test-feishu')
+def test_feishu():
+    results = {}
+    try:
+        r = requests.post(
+            'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+            json={'app_id': FEISHU_APP_ID, 'app_secret': FEISHU_APP_SECRET},
+            timeout=8
+        )
+        results['feishu_cn'] = {"status": r.status_code, "body": r.json()}
+    except Exception as e:
+        results['feishu_cn'] = f"FAIL - {str(e)}"
+    
+    try:
+        r = requests.post(
+            'https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal',
+            json={'app_id': FEISHU_APP_ID, 'app_secret': FEISHU_APP_SECRET},
+            timeout=8
+        )
+        results['lark_com'] = {"status": r.status_code, "body": r.json()}
+    except Exception as e:
+        results['lark_com'] = f"FAIL - {str(e)}"
+    
+    return jsonify(results)
+    
 @app.route('/webhook/<group_id>', methods=['POST'])
 def receive_webhook(group_id):
     """接收外部 Webhook 並中繼轉發"""
